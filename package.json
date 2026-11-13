@@ -1,0 +1,4 @@
+{
+  "private": true,
+  "scripts": { "test": "node --test swarmod.test.mjs && claude plugin test ." }
+}

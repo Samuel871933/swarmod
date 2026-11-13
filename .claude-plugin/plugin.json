@@ -1,0 +1,7 @@
+{
+  "name": "swarmod",
+  "version": "0.2.0",
+  "description": "Lightweight project map + context splitting: work by zones, delegate to cheap subagents, hand off before the context gets big.",
+  "hooks": ["./hooks/classic.json", "./hooks/sky.json"],
+  "types": "./types/index.d.ts"
+}

@@ -1,0 +1,7 @@
+{
+  "name": "swarmod",
+  "owner": { "name": "swarmod" },
+  "plugins": [
+    { "name": "swarmod", "description": "Lightweight project map + context splitting.", "source": "./" }
+  ]
+}
