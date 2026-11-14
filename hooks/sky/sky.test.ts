@@ -11,6 +11,8 @@ test('zones parse from map.md and files land in the deepest zone', async () => {
   expect(zoneOf('/p/lib/b.ts', '/p', zones)).toBe('lib')
   expect(zoneOf('/p/README.md', '/p', zones)).toBe('.')
   expect(zoneOf('/p/other/c.ts', '/p', zones)).toBe('')
+  expect(zoneOf('C:\\p\\lib\\site\\a.ts', 'c:\\p', zones)).toBe('lib/site')
+  expect(zoneOf('C:\\p\\README.md', 'c:\\p', zones)).toBe('.')
   expect(unslug('lib__site')).toBe('lib/site')
   expect(unslug('_root')).toBe('.')
 })

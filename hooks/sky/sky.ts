@@ -10,7 +10,9 @@ export const unslug = (s: string) => (s === '_root' ? '.' : s.replace(/__/g, '/'
 
 // Deepest zone containing the path ('.' holds root files only).
 export function zoneOf(file: string, cwd: string, zones: Zone[]): string {
-  const rel = file.startsWith(cwd + '/') ? file.slice(cwd.length + 1) : file
+  // Windows: backslashes and drive-letter case differ between tool paths and cwd.
+  const f = file.replace(/\\/g, '/'), c = cwd.replace(/\\/g, '/')
+  const rel = f.toLowerCase().startsWith(c.toLowerCase() + '/') ? f.slice(c.length + 1) : f
   let best = ''
   for (const { name } of zones) {
     if (name === '.' ? !rel.includes('/') && !best : rel.startsWith(name + '/') && name.length > best.length) best = name
