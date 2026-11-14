@@ -471,8 +471,8 @@ Do not copy file contents or tool output: the project map (.swarmod/map.md) is r
 const readHookInput = () => { try { return JSON.parse(fs.readFileSync(0, 'utf8')); } catch { return {}; } };
 
 // The skill is not loaded unless the model asks for it: the few rules that change behaviour ride with the map (~250 tokens).
-const ORDERS = cli => `swarmod orders — you are the general; spend the fewest tokens of your own context:
-- Locate code: \`node "${cli}" find <words>\` (defs, class prefixes, paths) before Grep/Glob over the repo.
+const ORDERS = cli => `swarmod orders — you are the general; spend the fewest tokens of your own context:${cli ? `
+- Locate code: \`node "${cli}" find <words>\` (defs, class prefixes, paths) before Grep/Glob over the repo.` : ''}
 - Under ~3k tokens to read: do it yourself. More reading, or an open-ended search/audit: send \`swarmod:soldier\` (haiku) with
   exact files and line hints. A clear edit after a big read: \`swarmod:lieutenant\` (sonnet). Hard or stuck: \`swarmod:captain\` (opus).
 - Several independent sub-tasks (different files): one agent each, all in a single message, disjoint file lists.
@@ -487,13 +487,16 @@ const ORDERS = cli => `swarmod orders — you are the general; spend the fewest 
 function session() {
   const { cwd = process.cwd() } = readHookInput();
   const out = [];
-  // Only auto-map real projects (git or opted-in), never e.g. $HOME.
+  // Only auto-map real projects (git or opted-in), never e.g. $HOME. The orders go everywhere, even to an empty folder.
+  let mapped = false;
   if (fs.existsSync(path.join(cwd, '.git')) || fs.existsSync(path.join(cwd, OUT))) {
     try {
       buildMap(cwd);
-      out.push(`<swarmod-map>\n${fs.readFileSync(path.join(cwd, OUT, 'map.md'), 'utf8')}</swarmod-map>`, ORDERS(fileURLToPath(import.meta.url)));
+      out.push(`<swarmod-map>\n${fs.readFileSync(path.join(cwd, OUT, 'map.md'), 'utf8')}</swarmod-map>`);
+      mapped = true;
     } catch (e) { out.push(`swarmod: map failed (${e.message})`); }
   }
+  out.push(ORDERS(mapped && fileURLToPath(import.meta.url)));
   const handoff = path.join(cwd, OUT, 'HANDOFF.md');
   if (fs.existsSync(handoff)) {
     out.push(`<swarmod-handoff>\n${fs.readFileSync(handoff, 'utf8')}</swarmod-handoff>`,
@@ -506,12 +509,9 @@ function session() {
 // UserPromptSubmit hook: past the threshold, tell Claude to write a handoff and ask for /clear.
 // Default 110k ≈ 55% of a 200k window, before native auto-compaction.
 function guard() {
-  const { transcript_path, prompt = '', session_id = '', cwd = process.cwd() } = readHookInput();
-  // "use swarmod" said once must hold for the whole session: the model otherwise forgets it after the first task.
-  const mode = path.join(cwd, OUT, 'mode');
-  if (/\bswarmod\b/i.test(prompt) && fs.existsSync(path.join(cwd, OUT))) fs.writeFileSync(mode, session_id);
-  else if (session_id && fs.existsSync(mode) && fs.readFileSync(mode, 'utf8') === session_id)
-    console.log('swarmod mode is on for this session (the user asked for it): follow the swarmod orders (delegate work that splits).');
+  const { transcript_path } = readHookInput();
+  // Repeated on every prompt: the model otherwise forgets the session-start orders after the first task.
+  console.log('swarmod: if this task splits into ≥2 independent parts, fan out per the swarmod orders; otherwise do it yourself.');
   const limit = Number(process.env.SWARMOD_HANDOFF_TOKENS) || 110_000;
   let tokens = 0;
   try { tokens = contextTokens(transcript_path); } catch { return; }

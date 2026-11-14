@@ -43,7 +43,9 @@ const run = (cmd, input, env = {}) =>
 
 test('session hook maps git projects and consumes the handoff once', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'swarmod-'));
-  assert.equal(run('session', { cwd: dir }), ''); // not a project: nothing injected
+  const bare = run('session', { cwd: dir }); // not a project: orders only, no map, no find
+  assert.match(bare, /swarmod orders/);
+  assert.doesNotMatch(bare, /<swarmod-map>|find <words>/);
   fs.mkdirSync(path.join(dir, '.git'));
   fs.writeFileSync(path.join(dir, 'a.py'), 'class Foo:\n  pass\n');
   fs.mkdirSync(path.join(dir, '.swarmod'));
@@ -60,8 +62,8 @@ test('guard reads context size from the transcript', () => {
   const usage = n => JSON.stringify({ message: { usage: { input_tokens: 2, cache_creation_input_tokens: 0, cache_read_input_tokens: n } } });
   fs.writeFileSync(t, [usage(10), '{"type":"user"}', usage(150_000), '{"type":"user"}'].join('\n'));
   assert.equal(contextTokens(t), 150_002);
-  assert.match(run('guard', { transcript_path: t }), /~150k tokens/);
-  assert.equal(run('guard', { transcript_path: t }, { SWARMOD_HANDOFF_TOKENS: '200000' }), '');
+  assert.match(run('guard', { cwd: dir, transcript_path: t }), /~150k tokens/);
+  assert.doesNotMatch(run('guard', { cwd: dir, transcript_path: t }, { SWARMOD_HANDOFF_TOKENS: '200000' }), /tokens/);
 });
 
 import { rankFiles } from './swarmod.mjs';
@@ -187,14 +189,11 @@ test('intel hook keeps proven NOTE lines in zone notes, drops unproven ones', ()
   assert.equal(recordNotes(dir, 'NOTE shortname: zone taken from the proof — proof: lib/a.js:2'), 1); // agents shorten zone names
 });
 
-test('guard keeps swarmod mode on for the session that asked for it', () => {
+test('guard repeats the split reminder on every prompt, even in an empty folder', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'swarmod-'));
-  fs.mkdirSync(path.join(dir, '.swarmod'));
   const t = path.join(dir, 't.jsonl');
   fs.writeFileSync(t, '');
-  assert.doesNotMatch(run('guard', { cwd: dir, transcript_path: t, session_id: 's1', prompt: 'Use swarmod for this session' }), /mode is on/);
-  assert.match(run('guard', { cwd: dir, transcript_path: t, session_id: 's1', prompt: 'next task' }), /mode is on/);
-  assert.doesNotMatch(run('guard', { cwd: dir, transcript_path: t, session_id: 's2', prompt: 'other session' }), /mode is on/);
+  assert.match(run('guard', { cwd: dir, transcript_path: t, prompt: 'any task' }), /fan out/);
 });
 
 test('split cuts code into balanced batches in path order, skipping tests and non-code', () => {

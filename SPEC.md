@@ -16,9 +16,10 @@ l'aider à travailler par zones pour garder le contexte principal petit.
    - `.swarmod/cache.json` : cache incrémental
    Zones = dossiers, redécoupés tant qu'un dossier dépasse `MAX_ZONE` fichiers.
 2. **Plugin Claude Code** (fait) :
-   - hook `SessionStart` (`swarmod session`) : rafraîchit et injecte la carte (projets git ou déjà opt-in),
+   - hook `SessionStart` (`swarmod session`) : injecte les ordres partout ; rafraîchit et injecte la carte (projets git ou déjà opt-in),
      injecte `.swarmod/HANDOFF.md` une seule fois puis le renomme en `HANDOFF.done.md`.
-   - hook `UserPromptSubmit` (`swarmod guard`) : lit la taille réelle du contexte dans le transcript ;
+   - hook `UserPromptSubmit` (`swarmod guard`) : rappelle à chaque prompt, partout (même dossier vide), de découper
+     le travail qui se découpe (sans avoir à dire « swarmod ») ; lit la taille réelle du contexte dans le transcript ;
      au-delà de `SWARMOD_HANDOFF_TOKENS` (défaut 110000), demande à Claude d'écrire le handoff et de proposer `/clear`.
    - skill `swarmod` : l'agent principal coordonne (plan depuis la carte, fichiers partagés d'abord, workers parallèles, check final).
    - agents par grade : `swarmod:soldier` (haiku, lecture seule), `swarmod:lieutenant` (sonnet, édite, envoie des soldats), `swarmod:captain` (opus, cas durs, arbitrage).
