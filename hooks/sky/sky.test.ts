@@ -1,6 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 
-import { parseZones, skySvg, unslug, zoneOf } from './sky'
+import type { Ship } from '../../types'
+import { move, parseZones, posOf, roleOf, ROLES, skySvg, starAt, station, unslug, zoneOf } from './sky'
 
 const MAP = '| zone | files | main symbols |\n|---|---|---|\n| `lib/site` | 36 | type Page |\n| `lib` | 33 | x |\n| `.` | 4 | — |\n'
 
@@ -17,15 +18,30 @@ test('zones parse from map.md and files land in the deepest zone', async () => {
   expect(unslug('_root')).toBe('.')
 })
 
-test('the sky draws a ship per agent and lights explored zones', async () => {
-  const svg = skySvg({
-    zones: parseZones(MAP),
-    ships: [{ id: 'a1', toolUseId: 't1', type: 'swarmod:lieutenant', model: 'claude-sonnet-5-5', zone: 'lib' }],
-    found: ['lib'],
-    percent: 42,
-  })
-  expect(svg.match(/<animateMotion/g)?.length).toBe(1)
-  expect(svg).toContain('#a78bfa')
-  expect(svg).toContain('main · 42%')
-  expect(svg).toContain('1/3 zones explored')
+const ship = (id: string, type: string, slot: number): Ship =>
+  ({ id, toolUseId: 't' + id, type, model: '', zone: '', slot, state: 'home' })
+
+test('ships explore to their finds, hover side by side to talk, and dock home', async () => {
+  const star = starAt('/p/lib/a.ts', 'lib')
+  let fleet = [ship('a', 'swarmod:soldier', 0), ship('b', 'swarmod:captain', 1)]
+  expect(posOf(fleet[0]!, fleet, [])).toEqual(station(0))
+  fleet = move(fleet, 'a', { state: 'explore', star: star.k }, [star], 1000)
+  expect(fleet[0]!.from).toEqual(station(0))
+  expect(posOf(fleet[0]!, fleet, [star])).toEqual({ x: star.x, y: star.y + 9 })
+  fleet = move(move(fleet, 'a', { state: 'talk', with: 'b' }, [star], 2000), 'b', { state: 'talk', with: 'a' }, [star], 2000)
+  const pa = posOf(fleet[0]!, fleet, [star]), pb = posOf(fleet[1]!, fleet, [star])
+  expect(pa.y).toBe(pb.y)
+  expect(pb.x - pa.x).toBe(16)
+  fleet = move(fleet, 'a', { state: 'talk', with: 'general' }, [star], 3000)
+  expect(posOf(fleet[0]!, fleet, [star])).toEqual(station(0))
+  expect(roleOf({ type: 'general-purpose', model: 'claude-opus-5-5' })).toBe('captain')
+})
+
+test('the sky draws the planet, a ship per agent in its rank colour, and a star per find', async () => {
+  const s = { ...ship('a1', 'swarmod:lieutenant', 0), state: 'explore' as const }
+  const svg = skySvg({ zones: parseZones(MAP), ships: [s], stars: [starAt('/p/lib/a.ts', 'lib')], found: ['lib'], percent: 42, now: 0 })
+  expect(svg.match(/<polygon/g)?.length).toBe(1)
+  expect(svg).toContain(`fill="${ROLES.lieutenant.c}"`)
+  expect(svg).toContain('general · 42% context')
+  expect(svg).toContain('1/1 out · 1 finds · 1/3 zones')
 })

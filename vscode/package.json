@@ -1,0 +1,15 @@
+{
+  "name": "swarmod-sky",
+  "displayName": "swarmod sky",
+  "description": "Shows the swarmod agents and map zones in a bottom panel tab.",
+  "version": "0.1.0",
+  "publisher": "swarmod",
+  "license": "MIT",
+  "engines": { "vscode": "^1.80.0" },
+  "main": "./extension.js",
+  "activationEvents": ["workspaceContains:.swarmod/map.md"],
+  "contributes": {
+    "viewsContainers": { "panel": [{ "id": "swarmodSky", "title": "Sky", "icon": "$(rocket)" }] },
+    "views": { "swarmodSky": [{ "type": "webview", "id": "swarmod.sky", "name": "Sky" }] }
+  }
+}
