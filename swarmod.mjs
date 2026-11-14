@@ -149,7 +149,9 @@ function gitHot(root) {
     const prefix = run(['rev-parse', '--show-prefix']).trim(); // map root may be a subfolder of the repo
     const files = [...run(['log', '-n', '30', '--name-only', '--format=']).split('\n'),
       ...run(['status', '--porcelain']).split('\n').map(l => l.slice(3).split(' -> ').pop())];
-    return new Set(files.filter(f => f && f.startsWith(prefix)).map(f => f.slice(prefix.length)));
+    const hot = new Set(files.filter(f => f && f.startsWith(prefix)).map(f => f.slice(prefix.length)));
+    // Shallow clone or one big import commit: "everything changed" says nothing about where the work is.
+    return hot.size > 0.5 * Number(run(['ls-files', '-z']).split('\0').length) ? new Set() : hot;
   } catch { return null; } // not a git repo
 }
 
@@ -275,9 +277,50 @@ export function refreshFile(root, abs) {
   c.files[f] = { key: `${st.mtimeMs}:${st.size}`, ...analyzeFile(abs, st.size), z, r: old?.r ?? 0, hot: true };
   // shortcut: two workers refreshing at the same instant can lose one cache update; the next session start rebuilds it.
   writeAtomic(cachePath, JSON.stringify(c));
-  const zf = Object.keys(c.files).filter(k => c.files[k].z === z).sort((a, b) => c.files[b].r - c.files[a].r);
-  writeZone(outDir, z, zf, c.files);
+  rewriteZone(outDir, z, c.files);
   return true;
+}
+
+const rewriteZone = (outDir, z, files) =>
+  writeZone(outDir, z, Object.keys(files).filter(k => files[k].z === z).sort((a, b) => files[b].r - files[a].r), files);
+
+// `NOTE <zone>: <fact> — proof: path:line[-line][, …]`, the line format every swarmod agent ends its report with.
+const NOTE_LINE = /^[\s>*-]*NOTE\s+(\S+?):\s*(.+?)\s+(?:—|--?)\s*proof:\s*(.+?)\s*$/;
+
+// Highest line number of a project file, 0 if it is missing or outside the project (a proof must point inside it).
+function lineCount(root, rel) {
+  const abs = path.resolve(root, rel);
+  if (path.relative(root, abs).startsWith('..')) return 0;
+  try { return fs.readFileSync(abs, 'utf8').split('\n').length; } catch { return 0; }
+}
+
+// Keep the NOTE lines whose proofs point at real lines: shared memory for the next agent of that zone, no LLM.
+export function recordNotes(root, text, by = 'agent') {
+  const outDir = path.join(root, OUT);
+  let files;
+  try { ({ files } = JSON.parse(fs.readFileSync(path.join(outDir, 'cache.json'), 'utf8'))); } catch { return 0; }
+  const zones = new Set(Object.values(files).map(i => i.z)), touched = new Set();
+  let kept = 0;
+  for (const line of text.split('\n')) {
+    const m = line.match(NOTE_LINE);
+    if (!m) continue;
+    const [, zone, fact, proof] = m;
+    const refs = proof.split(/[,;]\s*/).map(r => r.replace(/`/g, '').match(/^(.+):(\d+)(?:-(\d+))?$/));
+    let z = zones.has(zone) ? zone : zone === '_root' ? '.' : zone.replace(/__/g, '/'); // zone name or its slug
+    if (!zones.has(z)) z = files[path.relative(root, path.resolve(root, refs[0]?.[1] ?? '')).split(path.sep).join('/')]?.z; // agents shorten zone names: use the proof's zone
+    if (!z) continue;
+    // shortcut: checks the cited lines exist, not that they say what the fact claims; the contradiction protocol covers that.
+    if (!refs.every(r => r && Number(r[2]) > 0 && lineCount(root, r[1]) >= Number(r[3] ?? r[2]))) continue;
+    const notes = path.join(outDir, 'notes', `${slug(z)}.md`);
+    const old = fs.existsSync(notes) ? fs.readFileSync(notes, 'utf8') : '';
+    if (old.includes(`- ${fact} — proof:`)) continue;
+    fs.mkdirSync(path.dirname(notes), { recursive: true });
+    fs.appendFileSync(notes, `${old && !old.endsWith('\n') ? '\n' : ''}- ${fact} — proof: ${proof} (${by}, ${new Date().toISOString().slice(0, 10)})\n`);
+    touched.add(z);
+    kept++;
+  }
+  for (const z of touched) rewriteZone(outDir, z, files);
+  return kept;
 }
 
 function writeZone(outDir, z, zf, info) {
@@ -357,11 +400,28 @@ export function find(root, words, limit = 15) {
     .map(h => `${h.f}${h.defs.length ? ` — ${h.defs.join(', ')}` : ''}${h.role ? ` — ${h.role.slice(0, 60)}` : ''}`);
 }
 
+// Cut the code files (optionally only paths containing one of `words`) into n reading batches of equal size,
+// kept in path order so a batch holds whole folders: parallel soldiers then finish together (no straggler).
+export function split(info, n, words = []) {
+  const terms = words.map(w => w.toLowerCase());
+  const files = Object.keys(info).sort().filter(f => isCode(info[f]) && !TESTS.test(f)
+    && (!terms.length || terms.some(t => f.toLowerCase().includes(t))));
+  const size = f => Number(info[f].key.split(':')[1]);
+  const total = files.reduce((s, f) => s + size(f), 0);
+  const batches = Array.from({ length: Math.max(1, Math.min(n, files.length)) }, () => ({ files: [], bytes: 0 }));
+  let done = 0;
+  for (const f of files) {
+    const b = batches[Math.min(batches.length - 1, Math.floor((done + size(f) / 2) / (total / batches.length)))];
+    b.files.push(f); b.bytes += size(f); done += size(f);
+  }
+  return batches.filter(b => b.files.length);
+}
+
 // Syntax-check an edited file with the toolchain already on PATH. Returns the error, or '' (also when no linter).
 export function lint(abs) {
   const ext = path.extname(abs).toLowerCase();
   const cmd = { '.php': ['php', ['-l', abs]], '.js': ['node', ['--check', abs]], '.mjs': ['node', ['--check', abs]],
-    '.cjs': ['node', ['--check', abs]], '.py': ['python3', ['-c', 'import ast,sys; ast.parse(open(sys.argv[1]).read(), sys.argv[1])', abs]] }[ext];
+    '.cjs': ['node', ['--check', abs]], '.py': [process.platform === 'win32' ? 'python' : 'python3', ['-c', 'import ast,sys; ast.parse(open(sys.argv[1]).read(), sys.argv[1])', abs]] }[ext];
   if (ext === '.json') { try { JSON.parse(fs.readFileSync(abs, 'utf8')); return ''; } catch (e) { return e.message; } }
   if (!cmd) return '';
   try {
@@ -374,7 +434,8 @@ export function lint(abs) {
   catch (e) {
     if (e.code === 'ENOENT' || e.signal) return ''; // no linter installed, or too slow: stay silent
     const lines = `${e.stderr || ''}${e.stdout || ''}`.split('\n').filter(l => l.trim());
-    const i = Math.max(0, lines.findIndex(l => /error/i.test(l)));
+    const i = lines.findIndex(l => /error/i.test(l));
+    if (i < 0) return ''; // no error line: a broken toolchain (e.g. the Windows Store python stub), not a syntax error
     return lines.slice(Math.max(0, i - 3), i + 1).join('\n').slice(0, 600); // code line + caret + message, not a stack
   }
 }
@@ -409,6 +470,19 @@ Do not copy file contents or tool output: the project map (.swarmod/map.md) is r
 
 const readHookInput = () => { try { return JSON.parse(fs.readFileSync(0, 'utf8')); } catch { return {}; } };
 
+// The skill is not loaded unless the model asks for it: the few rules that change behaviour ride with the map (~250 tokens).
+const ORDERS = cli => `swarmod orders — you are the general; spend the fewest tokens of your own context:
+- Locate code: \`node "${cli}" find <words>\` (defs, class prefixes, paths) before Grep/Glob over the repo.
+- Under ~3k tokens to read: do it yourself. More reading, or an open-ended search/audit: send \`swarmod:soldier\` (haiku) with
+  exact files and line hints. A clear edit after a big read: \`swarmod:lieutenant\` (sonnet). Hard or stuck: \`swarmod:captain\` (opus).
+- Several independent sub-tasks (different files): one agent each, all in a single message, disjoint file lists.
+- Agents report with path:line proofs and \`NOTE <zone>: …\` lines; reuse zone Notes, do not re-check them.
+- Work that does not split into ≥2 independent parts (one page, one module, one Q&A pass): do it yourself, even when the user
+  says "swarmod", and do NOT load the swarmod skill: a lone agent or the skill only adds a round trip for the same result.
+  Bulk text (notes, logs): grep the question's terms and \`sort | uniq -c\` before reading or delegating.
+- Work that does split, or > ~25k tokens to read: load the swarmod skill first (fan-out, role briefs, escalation, handoff),
+  cap your own reading at ~3 files; soldiers read and you work from their proofs.`;
+
 // SessionStart hook: refresh the map, inject it, and consume a pending handoff once.
 function session() {
   const { cwd = process.cwd() } = readHookInput();
@@ -417,8 +491,7 @@ function session() {
   if (fs.existsSync(path.join(cwd, '.git')) || fs.existsSync(path.join(cwd, OUT))) {
     try {
       buildMap(cwd);
-      out.push(`<swarmod-map>\n${fs.readFileSync(path.join(cwd, OUT, 'map.md'), 'utf8')}</swarmod-map>`,
-        `swarmod: locate code with \`node "${fileURLToPath(import.meta.url)}" find <words>\` (~700 tokens) before browsing zone files; follow the swarmod skill rules.`);
+      out.push(`<swarmod-map>\n${fs.readFileSync(path.join(cwd, OUT, 'map.md'), 'utf8')}</swarmod-map>`, ORDERS(fileURLToPath(import.meta.url)));
     } catch (e) { out.push(`swarmod: map failed (${e.message})`); }
   }
   const handoff = path.join(cwd, OUT, 'HANDOFF.md');
@@ -433,7 +506,12 @@ function session() {
 // UserPromptSubmit hook: past the threshold, tell Claude to write a handoff and ask for /clear.
 // Default 110k ≈ 55% of a 200k window, before native auto-compaction.
 function guard() {
-  const { transcript_path } = readHookInput();
+  const { transcript_path, prompt = '', session_id = '', cwd = process.cwd() } = readHookInput();
+  // "use swarmod" said once must hold for the whole session: the model otherwise forgets it after the first task.
+  const mode = path.join(cwd, OUT, 'mode');
+  if (/\bswarmod\b/i.test(prompt) && fs.existsSync(path.join(cwd, OUT))) fs.writeFileSync(mode, session_id);
+  else if (session_id && fs.existsSync(mode) && fs.readFileSync(mode, 'utf8') === session_id)
+    console.log('swarmod mode is on for this session (the user asked for it): follow the swarmod orders (delegate work that splits).');
   const limit = Number(process.env.SWARMOD_HANDOFF_TOKENS) || 110_000;
   let tokens = 0;
   try { tokens = contextTokens(transcript_path); } catch { return; }
@@ -453,6 +531,19 @@ function postEdit() {
     additionalContext: `swarmod lint: ${path.basename(abs)} has a syntax error, fix it now:\n${err}` } }));
 }
 
+// SubagentStop hook: record the agent's proven NOTE lines (its report may be its last text or a SubagentHandback message).
+function intel() {
+  const { cwd = process.cwd(), agent_type = 'agent', agent_transcript_path, last_assistant_message = '' } = readHookInput();
+  const texts = [last_assistant_message];
+  try {
+    for (const l of fs.readFileSync(agent_transcript_path, 'utf8').split('\n')) {
+      if (!l.includes('NOTE')) continue;
+      for (const c of JSON.parse(l).message?.content ?? []) texts.push(c.text ?? c.input?.message ?? '');
+    }
+  } catch { /* no transcript: last message only */ }
+  recordNotes(cwd, texts.filter(t => typeof t === 'string').join('\n'), agent_type.replace(/^swarmod:/, ''));
+}
+
 if (process.argv[1] && fileURLToPath(import.meta.url) === fs.realpathSync(process.argv[1])) {
   const [cmd, dir = '.'] = process.argv.slice(2);
   if (cmd === 'map') {
@@ -461,9 +552,14 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === fs.realpathSync(proces
   } else if (cmd === 'find') {
     const out = find(process.cwd(), process.argv.slice(3));
     console.log(out.length ? out.join('\n') : 'no match: try other words, or read the zone file.');
+  } else if (cmd === 'split') {
+    const { files } = JSON.parse(fs.readFileSync(path.join(OUT, 'cache.json'), 'utf8'));
+    split(files, Number(dir) || 4, process.argv.slice(4)).forEach((b, i) =>
+      console.log(`batch ${i + 1} (~${Math.round(b.bytes / 4000)}k tokens): ${b.files.join(' ')}`));
   } else if (cmd === 'session') session();
   else if (cmd === 'guard') guard();
   else if (cmd === 'refresh') postEdit();
   else if (cmd === 'precompact') console.log(PRECOMPACT);
-  else { console.error('usage: swarmod map [dir] | find <words> | session | guard | refresh | precompact'); process.exit(1); }
+  else if (cmd === 'intel') intel();
+  else { console.error('usage: swarmod map [dir] | find <words> | split <n> [path words] | session | guard | refresh | precompact | intel'); process.exit(1); }
 }

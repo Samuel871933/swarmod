@@ -18,7 +18,7 @@ test('zones parse from map.md and files land in the deepest zone', async () => {
 test('the sky draws a ship per agent and lights explored zones', async () => {
   const svg = skySvg({
     zones: parseZones(MAP),
-    ships: [{ id: 'a1', toolUseId: 't1', type: 'swarmod:worker', model: 'claude-sonnet-5-5', zone: 'lib' }],
+    ships: [{ id: 'a1', toolUseId: 't1', type: 'swarmod:lieutenant', model: 'claude-sonnet-5-5', zone: 'lib' }],
     found: ['lib'],
     percent: 42,
   })

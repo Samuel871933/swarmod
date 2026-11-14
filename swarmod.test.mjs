@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { analyze, zonesOf } from './swarmod.mjs';
+import { analyze, zonesOf, split } from './swarmod.mjs';
 
 test('analyze extracts symbols/imports across languages', () => {
   const php = analyze(`<?php\n/**\n * Handles customer login flow\n */\nuse App\\Models\\User;\nfinal class LoginController {\n  public static function authenticate($u) {}\n}`);
@@ -34,10 +34,11 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { contextTokens } from './swarmod.mjs';
 
 const run = (cmd, input, env = {}) =>
-  execFileSync('node', [new URL('./swarmod.mjs', import.meta.url).pathname, cmd],
+  execFileSync('node', [fileURLToPath(new URL('./swarmod.mjs', import.meta.url)), cmd],
     { input: JSON.stringify(input), env: { ...process.env, ...env } }).toString();
 
 test('session hook maps git projects and consumes the handoff once', () => {
@@ -118,7 +119,7 @@ test('big projects: overview stays in budget, every zone stays reachable, find a
   assert.match(hits[0], /F42\.php — class Thing42Core$/); // license header is not a role
 });
 
-import { refreshFile, lint } from './swarmod.mjs';
+import { refreshFile, lint, recordNotes } from './swarmod.mjs';
 
 test('edit refresh, lint, find ranking and checks line', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'swarmod-'));
@@ -159,4 +160,56 @@ test('recently committed or uncommitted zones lead the map (git)', () => {
   const map = fs.readFileSync(path.join(dir, '.swarmod', 'map.md'), 'utf8');
   assert.match(map, /Recently active: custom/);
   assert.match(map.split('|---|---|---|\n')[1], /^\| `custom` /);
+});
+
+test('intel hook keeps proven NOTE lines in zone notes, drops unproven ones', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'swarmod-'));
+  fs.mkdirSync(path.join(dir, 'lib'));
+  fs.writeFileSync(path.join(dir, 'lib', 'a.js'), 'export function a() {}\n// two\n// three\n');
+  buildMap(dir);
+  const report = [
+    'STATUS: done',
+    'NOTE .: a() is the only export — proof: lib/a.js:1',
+    'NOTE .: invented fact — proof: lib/a.js:99',
+    'NOTE .: outside the project — proof: ../x.js:1',
+    'NOTE nozone: unknown zone and file — proof: nofile.js:1',
+  ].join('\n');
+  const transcript = path.join(dir, 'agent.jsonl');
+  fs.writeFileSync(transcript, JSON.stringify({ type: 'assistant', message: { content: [{ type: 'tool_use', name: 'SubagentHandback', input: { message: report } }] } }) + '\n');
+  const input = { cwd: dir, agent_type: 'swarmod:soldier', agent_transcript_path: transcript, last_assistant_message: 'ok' };
+  run('intel', input);
+  run('intel', input); // same report twice: no duplicate
+  const notes = fs.readFileSync(path.join(dir, '.swarmod', 'notes', '_root.md'), 'utf8');
+  assert.equal(notes.trim().split('\n').length, 1);
+  assert.match(notes, /^- a\(\) is the only export — proof: lib\/a\.js:1 \(soldier, \d{4}-\d\d-\d\d\)/);
+  assert.match(fs.readFileSync(path.join(dir, '.swarmod', 'zones', '_root.md'), 'utf8'), /a\(\) is the only export/);
+  assert.equal(recordNotes(dir, 'NOTE .: range — proof: lib/a.js:2-3, `lib/a.js:1`'), 1);
+  assert.equal(recordNotes(dir, 'NOTE shortname: zone taken from the proof — proof: lib/a.js:2'), 1); // agents shorten zone names
+});
+
+test('guard keeps swarmod mode on for the session that asked for it', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'swarmod-'));
+  fs.mkdirSync(path.join(dir, '.swarmod'));
+  const t = path.join(dir, 't.jsonl');
+  fs.writeFileSync(t, '');
+  assert.doesNotMatch(run('guard', { cwd: dir, transcript_path: t, session_id: 's1', prompt: 'Use swarmod for this session' }), /mode is on/);
+  assert.match(run('guard', { cwd: dir, transcript_path: t, session_id: 's1', prompt: 'next task' }), /mode is on/);
+  assert.doesNotMatch(run('guard', { cwd: dir, transcript_path: t, session_id: 's2', prompt: 'other session' }), /mode is on/);
+});
+
+test('split cuts code into balanced batches in path order, skipping tests and non-code', () => {
+  const f = (bytes, code = true) => ({ key: `1:${bytes}`, symbols: code ? ['x'] : [], imports: [] });
+  const info = { 'a/1.js': f(100), 'a/2.js': f(100), 'b/1.js': f(100), 'b/2.js': f(100), 'big.js': f(400),
+    'README.md': f(999, false), 'tests/t.js': f(999) };
+  const b = split(info, 2);
+  assert.deepEqual(b.map(x => x.files), [['a/1.js', 'a/2.js', 'b/1.js', 'b/2.js'], ['big.js']]);
+  assert.deepEqual(split(info, 3, ['b/']).map(x => x.files), [['b/1.js'], ['b/2.js']]);
+});
+
+test('every role brief named in the skill exists', () => {
+  const dir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'skills/swarmod');
+  const named = [...fs.readFileSync(path.join(dir, 'SKILL.md'), 'utf8').matchAll(/`(\w+)\.md`/g)].map(m => m[1])
+    .filter(n => n !== '_more');
+  assert.ok(named.length >= 10, `only ${named.length} briefs named`);
+  for (const n of named) assert.ok(fs.existsSync(path.join(dir, 'briefs', n + '.md')), `briefs/${n}.md missing`);
 });

@@ -23,6 +23,13 @@
         ]
       }
     ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/swarmod.mjs\" intel", "timeout": 10 }
+        ]
+      }
+    ],
     "PreCompact": [
       {
         "hooks": [
