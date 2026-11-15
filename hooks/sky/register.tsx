@@ -5,7 +5,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
 import type { Ship } from '../../types'
-import { move, parseZones, skySvg, skyText, starAt, unslug, zoneOf } from './sky'
+import { fleetText, gauge, move, parseZones, skySvg, skyText, starAt, unslug, zoneOf } from './sky'
 
 const PANE = 'swarmod-sky'
 const MAP = '.swarmod/map.md'
@@ -18,6 +18,7 @@ const view = atom({ plugin: 'swarmod', key: 'view' } as const, { open: true }, {
 const WRITES = new Set(['Write', 'Edit', 'MultiEdit', 'NotebookEdit'])
 const LIVE = ['pending', 'running', 'waiting']
 
+let limit = 110_000 // same threshold as the guard hook (swarmod.mjs)
 let zones: { name: string; files: number }[] = [] // cached for tool.call, refreshed on render
 const loadZones = async ($: EngineInterface) => {
   try { zones = parseZones(String(await $.fs.read(MAP))) } catch { zones = [] }
@@ -40,6 +41,7 @@ const dump = async ($: EngineInterface) => {
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     await $.command.register({ name: 'swarmod-sky', description: 'Show the swarmod agents and map as a sky' })
+    limit = Number(await $.env.get('SWARMOD_HANDOFF_TOKENS')) || limit
     await loadZones($)
     const open = await $.store.get('skyOpen')
     if (typeof open === 'boolean') await update($, view, () => ({ open }))
@@ -55,7 +57,7 @@ export const register: Register = on => {
 
   on('session.measure', async ($, e, next) => {
     if (e.changed.includes('context')) {
-      await update($, ctx, () => ({ percent: Math.round(e.context.percent ?? 0) }))
+      await update($, ctx, () => ({ percent: Math.round(((e.context.tokens ?? 0) / limit) * 100) }))
       await dump($)
     }
     return next(e)
@@ -107,10 +109,11 @@ export const register: Register = on => {
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     // Other mods share this slot: theirs draw below ours. next(e) rejects when nothing answers beneath.
     const below = await next(e).catch(() => undefined)
-    if (!zones.length) return below
     const els = $.ui.resolve(e)
     const { Box, Text, Button } = els
-    const sky = await skyOf($)
+    const sky = await skyOf($), g = gauge(sky.percent)
+    // The gauge shows everywhere; the sky only once an agent has flown (an empty planet says nothing).
+    const fleet = sky.zones.length > 0 && sky.ships.length > 0
     const { open } = await read($, view)
     const toggle = async () => {
       await update($, view, v => ({ open: !v.open }))
@@ -119,10 +122,11 @@ export const register: Register = on => {
     const mine = (
       <Box flexDirection="column" width={e.props.bodyColumns}>
         <Box flexDirection="row" alignItems="center" gap={1}>
-          <Button key="sky" plain label={open ? '▾ sky' : '▸ sky'} onPress={toggle} />
-          <Text dimColor wrap="truncate-end">{skyText(sky)}</Text>
+          {fleet && <Button key="sky" plain label={open ? '▾ sky' : '▸ sky'} onPress={toggle} />}
+          <Text color={g.color}>● {g.text}</Text>
+          {fleet && <Text dimColor wrap="truncate-end">{fleetText(sky)}</Text>}
         </Box>
-        {open && 'Svg' in els && <els.Svg source={skySvg(sky)} alt={skyText(sky)} />}
+        {fleet && open && 'Svg' in els && <els.Svg source={skySvg(sky)} alt={skyText(sky)} />}
       </Box>
     )
     return below ? <Box flexDirection="column">{mine}{below}</Box> : mine

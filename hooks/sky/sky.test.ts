@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 
 import type { Ship } from '../../types'
-import { move, parseZones, posOf, roleOf, ROLES, skySvg, starAt, station, unslug, zoneOf } from './sky'
+import { gauge, move, parseZones, posOf, roleOf, ROLES, skySvg, starAt, station, unslug, zoneOf } from './sky'
 
 const MAP = '| zone | files | main symbols |\n|---|---|---|\n| `lib/site` | 36 | type Page |\n| `lib` | 33 | x |\n| `.` | 4 | — |\n'
 
@@ -42,6 +42,8 @@ test('the sky draws the planet, a ship per agent in its rank colour, and a star 
   const svg = skySvg({ zones: parseZones(MAP), ships: [s], stars: [starAt('/p/lib/a.ts', 'lib')], found: ['lib'], percent: 42, now: 0 })
   expect(svg.match(/<polygon/g)?.length).toBe(1)
   expect(svg).toContain(`fill="${ROLES.lieutenant.c}"`)
-  expect(svg).toContain('general · 42% context')
+  expect(svg).toContain('general · 42% to /clear')
+  expect([gauge(42).color, gauge(70).color, gauge(100).color]).toEqual(['#4ade80', '#fbbf24', '#f87171'])
+  expect(gauge(128).text).toContain('/clear now')
   expect(svg).toContain('1/1 out · 1 finds · 1/3 zones')
 })

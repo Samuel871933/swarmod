@@ -81,6 +81,12 @@ function shipSvg(s: Ship, i: number, sky: Sky): string {
   return flying ? hull(fly) : `<g transform="translate(${f1(to.x)} ${f1(to.y)}) rotate(${turn})">${hull()}</g>`
 }
 
+// Context against the handoff limit (the guard hook, 110k by default), not the model window: 100% = time to /clear.
+export const gauge = (percent: number) => ({
+  color: percent >= 100 ? '#f87171' : percent >= 70 ? '#fbbf24' : '#4ade80',
+  text: percent >= 100 ? `context ${percent}%: /clear now` : `context ${percent}% of the /clear limit`,
+})
+
 export function skySvg(sky: Sky): string {
   const { zones, ships, stars, found, percent } = sky
   const fill = Math.max(0, Math.min(100, percent))
@@ -108,12 +114,13 @@ export function skySvg(sky: Sky): string {
     `<rect width="${W}" height="${H}" rx="6" fill="#0b1020"/>` + dots +
     `<circle cx="${PX}" cy="${PY}" r="${PR + 3}" fill="none" stroke="#f4a25944" stroke-width="4"/>` +
     `<circle cx="${PX}" cy="${PY}" r="${PR}" fill="url(#pl)"/>` + pads +
-    `<text x="${PX}" y="${PY - PR + 20}" font-size="9" fill="#fde7cf" text-anchor="middle">general · ${fill}% context</text>` +
+    `<text x="${PX}" y="${PY - PR + 20}" font-size="9" fill="#fde7cf" text-anchor="middle">general · ${percent}% to /clear</text>` +
     `<rect x="${PX - 30}" y="${PY - PR + 25}" width="60" height="3" rx="1.5" fill="#00000055"/>` +
-    `<rect x="${PX - 30}" y="${PY - PR + 25}" width="${f1(fill * 0.6)}" height="3" rx="1.5" fill="${fill > 60 ? '#f87171' : '#4ade80'}"/>` +
+    `<rect x="${PX - 30}" y="${PY - PR + 25}" width="${f1(fill * 0.6)}" height="3" rx="1.5" fill="${gauge(percent).color}"/>` +
     links + ships.map((s, i) => shipSvg(s, i, sky)).join('') + legend +
     `<text x="${W - 10}" y="${H - 5}" font-size="8" fill="#94a3b8" text-anchor="end">${out}/${ships.length} out · ${stars.length} finds · ${explored}/${zones.length} zones</text></svg>`
 }
 
-export const skyText = ({ zones, ships, stars, found, percent }: Sky) =>
-  `general ${percent}% context · ${ships.length} ships${ships.length ? ` (${ships.map(s => `${roleOf(s)}:${s.state}`).join(', ')})` : ''} · ${stars.length} finds · ${found.length}/${zones.length} zones`
+export const fleetText = ({ zones, ships, stars, found }: Sky) =>
+  `${ships.length} ships${ships.length ? ` (${ships.map(s => `${roleOf(s)}:${s.state}`).join(', ')})` : ''} · ${stars.length} finds · ${found.length}/${zones.length} zones`
+export const skyText = (sky: Sky) => `general ${sky.percent}% to /clear · ${fleetText(sky)}`
