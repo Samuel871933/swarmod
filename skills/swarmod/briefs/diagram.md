@@ -1,4 +1,4 @@
-# Diagram checklist — paste into every agent that draws an architecture, flow or sequence diagram
+# Diagram checklist — for every agent that draws an architecture, flow or sequence diagram
 
 Confirm each item before STATUS: done.
 1. Draw the real mechanism from the code: every box and arrow maps to a file, service, table or call you can cite (path:line). No invented components.

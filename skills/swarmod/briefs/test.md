@@ -1,4 +1,4 @@
-# Test checklist — paste into the brief of every agent that writes tests
+# Test checklist — for the brief of every agent that writes tests
 
 Confirm each item before STATUS: done.
 1. Read the existing tests first and match their runner, layout, naming and fixtures; find the real test command.

@@ -1,4 +1,4 @@
-# Docs / spec / plan checklist — paste into every agent that writes documentation, specs, ADRs or plans
+# Docs / spec / plan checklist — for every agent that writes documentation, specs, ADRs or plans
 
 Confirm each item before STATUS: done.
 1. Match the project's existing doc locations, numbering and headings before using a template.

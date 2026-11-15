@@ -1,4 +1,4 @@
-# Refactor checklist — paste into the brief of every agent that simplifies or restructures code
+# Refactor checklist — for the brief of every agent that simplifies or restructures code
 
 Confirm each item before STATUS: done.
 1. Before changing code, know why it exists: its callers (grep), its tests, and `git log -L` on surprising lines.

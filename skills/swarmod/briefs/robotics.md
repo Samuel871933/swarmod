@@ -1,4 +1,4 @@
-# Robotics checklist — paste into every agent that writes robot, embedded or control code
+# Robotics checklist — for every agent that writes robot, embedded or control code
 
 Confirm each item before STATUS: done. Never cut calibration, limits or safety code to simplify.
 1. SI units and explicit frames (ROS REP 103: x forward, y left, z up, metres, radians); every transform names its parent and child frame.

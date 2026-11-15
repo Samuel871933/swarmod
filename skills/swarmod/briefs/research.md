@@ -1,4 +1,4 @@
-# Research checklist — paste into every research agent's brief (web, docs, papers, libraries)
+# Research checklist — for every research agent's brief (web, docs, papers, libraries)
 
 Every claim in the report carries its source URL (with anchor or page) and the source's date.
 1. Pin the exact version or date in scope first (dependency file, the user's words); flag answers for another version.

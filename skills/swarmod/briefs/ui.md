@@ -1,4 +1,4 @@
-# UI / design checklist — paste into the brief of every agent that builds or reviews an interface
+# UI / design checklist — for the brief of every agent that builds or reviews an interface
 
 Confirm each item (or report it as a finding with path:line) before STATUS: done.
 1. Use the project's design tokens, components and spacing scale; no raw hex or off-scale values. A house component beats a native one.

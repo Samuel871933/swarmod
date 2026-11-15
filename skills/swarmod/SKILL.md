@@ -31,8 +31,9 @@ send soldiers only on what still exceeds ~25k tokens after that.
 **Never ScheduleWakeup or sleep to wait for agents**: you are re-invoked when each one finishes (a 1800s wakeup once held a done audit 30 min).
 
 ## Role briefs: specialist checklists (measured on audits: more findings at lower cost)
-Before briefing agents for a kind of work below, Read its file in `briefs/` (next to this skill, ~250 tokens) once and paste it
-into every brief of that kind, after the file list. Mixed work → paste each matching one. A task you do yourself: read only `bug.md`.
+Put its absolute path in every brief of that kind, after the file list: `Checklist: Read <this skill's base directory>/briefs/audit.md`.
+Do not read or paste it yourself: every line you write delays the next agent's start (agents read it in their first turn, in parallel).
+Mixed work → one line per matching file. A task you do yourself: read only `bug.md`.
 | Work | Brief | Work | Brief |
 |---|---|---|---|
 | Security audit | `audit.md` | Code review | `review.md` |
@@ -51,9 +52,10 @@ the skill wins where they conflict. Soldiers load only a skill named in their br
 
 ## Wide reading (audit, orientation, "how does X work", review): fan out, never one big reader
 1. `node <this skill's base directory>/../../swarmod.mjs split <n> [path words]` cuts the code into n batches of equal size.
-   n ≈ code tokens / 25k, 2 to 6. Equal batches finish together: the slowest soldier sets your wait.
+   n ≈ code tokens / 15k, 2 to 8. The slowest soldier sets your wait: small batches cap it (one 25k batch with
+   money/ladder logic once ran 140s while the others took 70s). Keep each brief short: focus, batch, checklist path; no pasted text.
 2. One `swarmod:soldier` per batch, **all in one message**, same question, its batch as the file list.
-   Paste the matching role brief (below) into every brief. Only soldiers here:
+   Give the matching role brief's path (below) in every brief. Only soldiers here:
    a lieutenant on read-only work costs ~2.5× for the same result (measured).
 3. While they run, do nothing. Then re-read only the cited lines of findings you will report as high severity or that conflict.
    A soldier's "checked / sound" or "guarded by X" is a claim like any other: trust it only with a quoted condition at `path:line`;
@@ -80,7 +82,7 @@ the skill wins where they conflict. Soldiers load only a skill named in their br
    Tests go to the agent that writes the code they test: a separate test agent waits on that code and adds cost.
 3. Launch the independent agents **in a single message** so they run in parallel.
    For heavy parallel edits in a git repo, pass `isolation: "worktree"`.
-4. Brief each one with: goal, acceptance criteria, files allowed, relevant zone file path, decisions already made, its role brief. Nothing else.
+4. Brief each one with: goal, acceptance criteria, files allowed, relevant zone file path, decisions already made, its role brief path. Nothing else.
 5. Use the reports; do not re-read an agent's files unless its check failed or reports conflict.
 6. Finish with one project-level check from `Checks:` yourself. Send failures back to the agent that owns the files.
 

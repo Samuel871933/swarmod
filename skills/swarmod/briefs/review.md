@@ -1,4 +1,4 @@
-# Review checklist — paste into every code-review agent's brief, after the files or diff
+# Review checklist — for every code-review agent's brief, after the files or diff
 
 For each item: a finding labelled Critical / Required / Nit / FYI with path:line, or "sound" with the quoted line, or "not checked".
 1. Correctness first: inverted or off-by-one conditions, unhandled null/empty/error paths, wrong units, races on shared state.

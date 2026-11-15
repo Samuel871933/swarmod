@@ -476,6 +476,8 @@ const ORDERS = cli => `swarmod orders — you are the general; spend the fewest 
 - Under ~3k tokens to read: do it yourself. More reading, or an open-ended search/audit: send \`swarmod:soldier\` (haiku) with
   exact files and line hints. A clear edit after a big read: \`swarmod:lieutenant\` (sonnet). Hard or stuck: \`swarmod:captain\` (opus).
 - Several independent sub-tasks (different files): one agent each, all in a single message, disjoint file lists.
+- An installed skill in this session's list matches the work (xlsx, pdf, design, a house skill…): load it if you do the work,
+  or write "load skill \`<name>\` first" in the agent's brief. It beats any generic checklist.
 - Agents report with path:line proofs and \`NOTE <zone>: …\` lines; reuse zone Notes, do not re-check them.
 - Work that does not split into ≥2 independent parts (one page, one module, one Q&A pass): do it yourself, even when the user
   says "swarmod", and do NOT load the swarmod skill: a lone agent or the skill only adds a round trip for the same result.

@@ -1,4 +1,4 @@
-# Dataviz checklist — paste into every agent that makes a chart, dashboard or stat tile
+# Dataviz checklist — for every agent that makes a chart, dashboard or stat tile
 
 Confirm each item before STATUS: done.
 1. One question per chart, written as its title ("Revenue fell 12% in Q3"), not a label ("Revenue").

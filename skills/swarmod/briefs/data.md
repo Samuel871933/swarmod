@@ -1,4 +1,4 @@
-# Schema / migration / API checklist — paste into the brief of every agent touching schemas, migrations or public interfaces
+# Schema / migration / API checklist — for the brief of every agent touching schemas, migrations or public interfaces
 
 Confirm each item before STATUS: done.
 1. Contract first: types, endpoints or schema written before the code; changes additive only (new optional fields).

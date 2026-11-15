@@ -1,4 +1,4 @@
-# LLM app checklist — paste into every agent that builds or changes code calling an LLM API (Claude or other)
+# LLM app checklist — for every agent that builds or changes code calling an LLM API (Claude or other)
 
 Confirm each item before STATUS: done.
 1. Model ids, prices and limits come from the provider's current docs or the SDK installed (quote the source), never from memory.

@@ -1,4 +1,4 @@
-# Bug checklist — paste into the brief of the agent that fixes a bug (read it yourself if you fix it)
+# Bug checklist — for the brief of the agent that fixes a bug (read it yourself if you fix it)
 
 Report each item done, with proof (command output or path:line), before STATUS: done.
 1. Reproduce first: the exact command/input and the failing output, quoted. Not reproduced → STATUS: blocked with what you tried.

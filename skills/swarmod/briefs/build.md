@@ -1,4 +1,4 @@
-# Build checklist — paste into the brief of every agent that writes a feature or an app
+# Build checklist — for the brief of every agent that writes a feature or an app
 
 Confirm each item before STATUS: done, or say why it does not apply.
 1. Find the project's own test/build/lint commands (package.json, Makefile, `Checks:` in the map); never assume them.

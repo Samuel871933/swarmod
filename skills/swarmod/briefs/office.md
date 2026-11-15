@@ -1,4 +1,4 @@
-# Office files checklist — paste into every agent that reads or writes .docx, .xlsx, .pptx or .pdf
+# Office files checklist — for every agent that reads or writes .docx, .xlsx, .pptx or .pdf
 
 Confirm each item before STATUS: done.
 1. Never overwrite the input file: write a new file next to it, and say its full path.

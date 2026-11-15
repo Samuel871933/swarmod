@@ -1,4 +1,4 @@
-# Audit checklist — paste into every audit soldier's brief, after the file list
+# Audit checklist — for every audit soldier's brief, after the file list
 
 For each item: report a finding, or "sound" with the quoted guard at path:line, or "not checked".
 1. Guards that do nothing: a check whose result is unused (`consume()` without `isAccepted()`), a comparison that can never be true

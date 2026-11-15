@@ -1,4 +1,4 @@
-# Performance checklist — paste into every performance agent's brief
+# Performance checklist — for every performance agent's brief
 
 For each item: a finding with path:line and the measured or estimated impact, or "not measured".
 1. Baseline first: the exact command and its numbers. No change without a measurement before and after, same conditions.

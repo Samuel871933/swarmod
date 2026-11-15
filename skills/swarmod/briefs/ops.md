@@ -1,4 +1,4 @@
-# CI / deploy / observability checklist — paste into the brief of every agent touching pipelines, releases or monitoring
+# CI / deploy / observability checklist — for the brief of every agent touching pipelines, releases or monitoring
 
 Confirm each item before STATUS: done.
 1. Gates in order: lint, type check, tests, build, dependency audit; a failing gate is fixed, never skipped or disabled.

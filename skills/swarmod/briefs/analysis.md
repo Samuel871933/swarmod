@@ -1,4 +1,4 @@
-# Data analysis / data mining checklist — paste into every agent that analyses data or builds a model
+# Data analysis / data mining checklist — for every agent that analyses data or builds a model
 
 Report each item with the number or the command output that shows it.
 1. Provenance: each dataset's source, date range, row count and one sample row. Never modify raw data; write derived files.
