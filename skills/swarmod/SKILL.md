@@ -42,7 +42,12 @@ into every brief of that kind, after the file list. Mixed work → paste each ma
 | Schema, migration, API | `data.md` | CI, deploy, monitoring | `ops.md` |
 | Web/docs research | `research.md` | Data analysis, mining, ML | `analysis.md` |
 | 3D assets, scenes | `3d.md` | Robotics, embedded | `robotics.md` |
-| Docs, spec, plan | `docs.md` | | |
+| Docs, spec, plan | `docs.md` | Charts, dashboards | `dataviz.md` |
+| Diagrams | `diagram.md` | .docx .xlsx .pptx .pdf | `office.md` |
+| LLM API apps | `llm.md` | | |
+**Installed skills beat briefs.** Check the skill list of this session first (it differs per machine; never name a skill that is not in it): a skill that matches the work (design, xlsx, a house skill…) is more
+precise than any brief. Name it in the brief ("load skill `<name>` first") so the agent loads it and keeps the brief: both apply,
+the skill wins where they conflict. Soldiers load only a skill named in their brief: name one only when it changes what they look for. No skill and no brief: say so.
 
 ## Wide reading (audit, orientation, "how does X work", review): fan out, never one big reader
 1. `node <this skill's base directory>/../../swarmod.mjs split <n> [path words]` cuts the code into n batches of equal size.
