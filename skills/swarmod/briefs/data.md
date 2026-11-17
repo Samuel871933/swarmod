@@ -9,3 +9,4 @@ Confirm each item before STATUS: done.
 6. Check-then-write on shared rows inside a transaction, or with a lock that reloads the row.
 7. Before removing anything public: grep and measure its consumers; a working replacement exists.
 8. No data destroyed without a backup or a dry run first; say which.
+Default steps: 1. current schema/contract 2. migration (reversible) 3. update callers 4. run migration + tests

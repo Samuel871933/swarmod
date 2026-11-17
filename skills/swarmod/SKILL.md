@@ -46,9 +46,9 @@ Mixed work → one line per matching file. A task you do yourself: read only `bu
 | Docs, spec, plan | `docs.md` | Charts, dashboards | `dataviz.md` |
 | Diagrams | `diagram.md` | .docx .xlsx .pptx .pdf | `office.md` |
 | LLM API apps | `llm.md` | | |
-**Installed skills beat briefs.** Check the skill list of this session first (it differs per machine; never name a skill that is not in it): a skill that matches the work (design, xlsx, a house skill…) is more
-precise than any brief. Name it in the brief ("load skill `<name>` first") so the agent loads it and keeps the brief: both apply,
-the skill wins where they conflict. Soldiers load only a skill named in their brief: name one only when it changes what they look for. No skill and no brief: say so.
+**Skills beat briefs, picked on demand.** Per step run `node <this skill's base directory>/../../swarmod.mjs skills <words>` (~300 tokens; do not scan the native list).
+A match is more precise than any brief: name it in that step and brief ("load skill `<name>` first"); both apply, the skill wins on conflict.
+`[library]` skills (not in the native list) are loaded by `Read <path>`. Soldiers load only a skill named in their brief. No skill and no brief: say so.
 
 ## Wide reading (audit, orientation, "how does X work", review): fan out, never one big reader
 1. `node <this skill's base directory>/../../swarmod.mjs split <n> [path words]` cuts the code into n batches of equal size.
@@ -65,14 +65,26 @@ the skill wins where they conflict. Soldiers load only a skill named in their br
    soldiers misjudge framework semantics (e.g. a Doctrine `lock()` does not reload the entity).
 
 ## Protocol (the same at every rank)
-- **Proof or it did not happen**: every fact carries a `path:line` the agent read. Reports start with `STATUS: done | blocked | contested`.
-- **Shared memory, not chatter**: agents never talk to each other. Durable findings go in `NOTE <zone>: <fact> — proof: path:line` lines;
-  a hook checks the proof exists and appends it to `.swarmod/notes/`, so every later agent of that zone gets it in its zone file.
+- **Proof or it did not happen**: every fact carries a `path:line` the agent read. Reports start with `STATUS: done | unproven | blocked | contested`.
+  `done` needs a proof; check lines are verified by a hook. `unproven` = not done: re-check it yourself or send it up, never build on it.
+- **Shared memory, not chatter**: agents never talk to each other. Durable findings go in `NOTE <zone>: <fact> — proof: path:line "<quote>"` lines;
+  a hook checks the quote is at the cited line (re-anchored when the code moves, dropped when it disappears) and appends it to `.swarmod/notes/`, so every later agent of that zone gets it in its zone file.
 - **Escalate upward only**: an agent stuck after two real attempts returns `BLOCKED` with what it tried. Its superior handles it,
   or passes it up. You decide: give it to the next rank with the tried list and proofs, or ask the user. Never re-send to the same rank unchanged.
 - **Contradiction, only when it matters**: a doubtful fact that a decision depends on gets two soldiers in one message,
-  one to PROVE it, one to REFUTE it, same files. Agree → settled, record `NOTE <zone>: ✓|✗ <fact>`. Disagree → the caller reads only the cited
+  one to PROVE it, one to REFUTE it (`model: "sonnet"`, to decorrelate blind spots), same files. Agree → settled, record `NOTE <zone>: ✓|✗ <fact>`. Disagree → the caller reads only the cited
   lines and rules; still unsure → `contested` goes up a rank. A captain's contested point that code cannot settle → ask the user.
+
+## Think in steps (PLAN.md)
+Task with ≥3 distinct steps: write `.swarmod/PLAN.md` first, from the `Default steps:` line of the matching role brief, adapted. Small task: no plan.
+```
+# Plan — <goal>
+- [ ] 1. <objective> | proof: <expected evidence> | needs: — | by: self|soldier|lieutenant|captain | skill: <name or ->
+```
+Marks: `[~]` running, `[x]` proven (`path:line "quote"` or `cmd → pass`), `[!]` refuted, `[?]` unproven. `needs:` = step numbers or `—`.
+Launch all ready independent steps together; mark `[x]` only with a proof. `swarmod plan` and the guard hook show what is ready.
+A delegated bug: write the failing test first (you or one agent); it is NOT in the fixer's files.
+Delegation rule unchanged: a step you can do yourself, do yourself.
 
 ## Split a multi-part task
 1. Plan from the map and `find`: list sub-tasks **by feature**, each with an explicit list of files it may touch.

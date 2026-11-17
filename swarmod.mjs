@@ -3,11 +3,13 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
+import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 
 const OUT = '.swarmod';
 const MAX_ZONE = 40;          // max files per zone before splitting by subdir
 const MAX_SYMBOLS = 12;       // per file in zone detail
+const MAX_NOTES = 20;         // per zone file, newest kept
 const MAX_FILE_BYTES = 512_000;
 const MAP_BUDGET = 6000;      // chars of map.md (~1.5k tokens), injected at every session start
 const IGNORE_DIRS = new Set(['.git', 'node_modules', 'vendor', 'dist', 'build', 'out', 'target', '.next',
@@ -193,6 +195,8 @@ const isCode = i => i.symbols.length || i.imports.length;
 export function buildMap(root) {
   const outDir = path.join(root, OUT);
   fs.mkdirSync(path.join(outDir, 'zones'), { recursive: true });
+  // the folder ignores itself: never committed, and no change to the user's own .gitignore (agents saw it in git diff)
+  fs.writeFileSync(path.join(outDir, '.gitignore'), '*\n');
   const cachePath = path.join(outDir, 'cache.json');
   let cache = {};
   try {
@@ -209,7 +213,9 @@ export function buildMap(root) {
     if (cache[f]?.key === key) { info[f] = cache[f]; continue; }
     info[f] = { key, ...analyzeFile(path.join(root, f), st.size) };
     analyzed++;
+    if (cache[f]) reanchor(root, f); // changed outside Claude's edits (git pull, by hand): its notes follow the code
   }
+  for (const f of Object.keys(cache)) if (!info[f]) reanchor(root, f); // deleted: notes citing it are dropped
   scoreFiles(info, root);
   const byR = (a, b) => info[b].r - info[a].r;
   // Zone weight counts code files only, so big data/translation folders don't float to the top.
@@ -277,6 +283,7 @@ export function refreshFile(root, abs) {
   c.files[f] = { key: `${st.mtimeMs}:${st.size}`, ...analyzeFile(abs, st.size), z, r: old?.r ?? 0, hot: true };
   // shortcut: two workers refreshing at the same instant can lose one cache update; the next session start rebuilds it.
   writeAtomic(cachePath, JSON.stringify(c));
+  for (const n of reanchor(root, f)) for (const k of zonesKnown) if (n === `${slug(k)}.md`) rewriteZone(outDir, k, c.files);
   rewriteZone(outDir, z, c.files);
   return true;
 }
@@ -284,40 +291,66 @@ export function refreshFile(root, abs) {
 const rewriteZone = (outDir, z, files) =>
   writeZone(outDir, z, Object.keys(files).filter(k => files[k].z === z).sort((a, b) => files[b].r - files[a].r), files);
 
-// `NOTE <zone>: <fact> — proof: path:line[-line][, …]`, the line format every swarmod agent ends its report with.
+// `NOTE <zone>: <fact> — proof: path:line[-line] "<exact text of that line>"`, the line format every swarmod agent ends its report with.
 const NOTE_LINE = /^[\s>*-]*NOTE\s+(\S+?):\s*(.+?)\s+(?:—|--?)\s*proof:\s*(.+?)\s*$/;
+const PROOF = /^`?([^\s`"]+?):(\d+)(?:-(\d+))?`?\s+"(.+)"$/;
+const ANCHORED = /^(- .+? — proof: )(\S+?):(\d+)(?:-(\d+))? "(.+)"( \(.*)$/; // a stored note
+const norm = s => s.replace(/\s+/g, ' ').trim();
+const quoteNear = (lines, a, b, q) => norm(lines.slice(Math.max(0, a - 3), b + 2).join('\n')).includes(norm(q)); // cited lines ±2
 
-// Highest line number of a project file, 0 if it is missing or outside the project (a proof must point inside it).
-function lineCount(root, rel) {
+// Lines of a project file, [] if it is missing or outside the project (a proof must point inside it).
+function readLines(root, rel) {
   const abs = path.resolve(root, rel);
-  if (path.relative(root, abs).startsWith('..')) return 0;
-  try { return fs.readFileSync(abs, 'utf8').split('\n').length; } catch { return 0; }
+  if (path.relative(root, abs).startsWith('..')) return [];
+  try { return fs.readFileSync(abs, 'utf8').split('\n'); } catch { return []; }
 }
 
-// Keep the NOTE lines whose proofs point at real lines: shared memory for the next agent of that zone, no LLM.
-export function recordNotes(root, text, by = 'agent') {
+// The file `f` changed: notes citing it follow the code. Quote still near its line: keep; found once elsewhere: new line number;
+// gone: drop the note (the fact may be false now). Returns the notes files touched.
+function reanchor(root, f) {
+  const dir = path.join(root, OUT, 'notes'), changed = [];
+  const lines = readLines(root, f);
+  for (const n of fs.existsSync(dir) ? fs.readdirSync(dir) : []) {
+    let dirty = false;
+    const out = fs.readFileSync(path.join(dir, n), 'utf8').split('\n').flatMap(l => {
+      const m = l.match(ANCHORED);
+      if (!m || m[2] !== f || quoteNear(lines, +m[3], +(m[4] ?? m[3]), m[5])) return [l];
+      dirty = true;
+      const hits = lines.flatMap((t, i) => norm(t).includes(norm(m[5])) ? [i + 1] : []);
+      return hits.length === 1 ? [`${m[1]}${f}:${hits[0]} "${m[5]}"${m[6]}`] : [];
+    });
+    if (dirty) { fs.writeFileSync(path.join(dir, n), out.join('\n')); changed.push(n); }
+  }
+  return changed;
+}
+
+// Keep the NOTE lines whose quote really appears at the cited lines: shared memory for the next agent of that zone, no LLM.
+// `stat.rejected` counts the notes dropped for a bad proof.
+export function recordNotes(root, text, by = 'agent', stat = {}) {
   const outDir = path.join(root, OUT);
   let files;
   try { ({ files } = JSON.parse(fs.readFileSync(path.join(outDir, 'cache.json'), 'utf8'))); } catch { return 0; }
   const zones = new Set(Object.values(files).map(i => i.z)), touched = new Set();
   let kept = 0;
+  stat.rejected = 0;
   for (const line of text.split('\n')) {
     const m = line.match(NOTE_LINE);
     if (!m) continue;
     const [, zone, fact, proof] = m;
-    const refs = proof.split(/[,;]\s*/).map(r => r.replace(/`/g, '').match(/^(.+):(\d+)(?:-(\d+))?$/));
+    const p = proof.match(PROOF), a = Number(p?.[2]), b = Number(p?.[3] ?? a);
+    // shortcut: one path:line "quote" per note (no comma lists); the quote proves the line, not that the fact follows from it.
+    if (!p || !a || !quoteNear(readLines(root, p[1]), a, b, p[4]) || readLines(root, p[1]).length < b) { stat.rejected++; continue; }
     let z = zones.has(zone) ? zone : zone === '_root' ? '.' : zone.replace(/__/g, '/'); // zone name or its slug
-    if (!zones.has(z)) z = files[path.relative(root, path.resolve(root, refs[0]?.[1] ?? '')).split(path.sep).join('/')]?.z; // agents shorten zone names: use the proof's zone
-    if (!z) continue;
-    // shortcut: checks the cited lines exist, not that they say what the fact claims; the contradiction protocol covers that.
-    if (!refs.every(r => r && Number(r[2]) > 0 && lineCount(root, r[1]) >= Number(r[3] ?? r[2]))) continue;
+    if (!zones.has(z)) z = files[path.relative(root, path.resolve(root, p[1])).split(path.sep).join('/')]?.z; // agents shorten zone names: use the proof's zone
+    if (!z) { stat.rejected++; continue; }
     const notes = path.join(outDir, 'notes', `${slug(z)}.md`);
     const old = fs.existsSync(notes) ? fs.readFileSync(notes, 'utf8') : '';
-    if (old.includes(`- ${fact} — proof:`)) continue;
+    // Already known: move it to the end (newest) with its fresh proof, so a note an agent needed again stays in the shown window.
+    const rest = old.split('\n').filter(l => l && !l.startsWith(`- ${fact} — proof:`)), dup = rest.length < old.split('\n').filter(Boolean).length;
     fs.mkdirSync(path.dirname(notes), { recursive: true });
-    fs.appendFileSync(notes, `${old && !old.endsWith('\n') ? '\n' : ''}- ${fact} — proof: ${proof} (${by}, ${new Date().toISOString().slice(0, 10)})\n`);
+    fs.writeFileSync(notes, [...rest, `- ${fact} — proof: ${p[1]}:${p[2]}${p[3] ? '-' + p[3] : ''} "${p[4]}" (${by}, ${new Date().toISOString().slice(0, 10)})`].join('\n') + '\n');
     touched.add(z);
-    kept++;
+    if (!dup) kept++;
   }
   for (const z of touched) rewriteZone(outDir, z, files);
   return kept;
@@ -326,7 +359,13 @@ export function recordNotes(root, text, by = 'agent') {
 function writeZone(outDir, z, zf, info) {
   const detail = [`# Zone: ${z}`, ''];
   const notesPath = path.join(outDir, 'notes', `${slug(z)}.md`);
-  if (fs.existsSync(notesPath)) detail.push('## Notes (learned while working — trust but verify)', fs.readFileSync(notesPath, 'utf8').trim(), '', '## Files');
+  // Newest MAX_NOTES shown (a re-found note moves back to newest); older ones stay greppable, never lost.
+  if (fs.existsSync(notesPath)) {
+    const all = fs.readFileSync(notesPath, 'utf8').trim().split('\n').filter(Boolean), hidden = all.length - MAX_NOTES;
+    detail.push('## Notes (quote-proven, re-anchored when their file changes: reuse them)',
+      ...(hidden > 0 ? [`- (+${hidden} older notes: Grep \`${OUT}/notes/${slug(z)}.md\` for your terms before re-checking a fact)`] : []),
+      all.slice(-MAX_NOTES).join('\n'), '', '## Files');
+  }
   const plain = [], namesOnly = []; // data files, and files past the budget: names only
   let size = detail.join('\n').length;
   for (const f of zf) {
@@ -411,7 +450,7 @@ export function split(info, n, words = []) {
   const batches = Array.from({ length: Math.max(1, Math.min(n, files.length)) }, () => ({ files: [], bytes: 0 }));
   let done = 0;
   for (const f of files) {
-    const b = batches[Math.min(batches.length - 1, Math.floor((done + size(f) / 2) / (total / batches.length)))];
+    const b = batches[Math.min(batches.length - 1, Math.floor((done + size(f) / 2) / (Math.max(1, total) / batches.length)))];
     b.files.push(f); b.bytes += size(f); done += size(f);
   }
   return batches.filter(b => b.files.length);
@@ -471,7 +510,9 @@ Do not copy file contents or tool output: the project map (.swarmod/map.md) is r
 const readHookInput = () => { try { return JSON.parse(fs.readFileSync(0, 'utf8')); } catch { return {}; } };
 
 // The skill is not loaded unless the model asks for it: the few rules that change behaviour ride with the map (~250 tokens).
-const ORDERS = cli => `swarmod orders — you are the general; spend the fewest tokens of your own context:${cli ? `
+const ORDERS = cli => `swarmod orders — you are the general; spend the fewest tokens of your own context:
+- Work that splits into ≥2 independent parts, or > ~25k tokens to read: load the swarmod skill FIRST, before any read or agent
+  (fan-out, role briefs, PLAN.md, skills, QA, handoff); cap your own reading at ~3 files; soldiers read, you work from proofs.${cli ? `
 - Locate code: \`node "${cli}" find <words>\` (defs, class prefixes, paths) before Grep/Glob over the repo.` : ''}
 - Under ~3k tokens to read: do it yourself. More reading, or an open-ended search/audit: send \`swarmod:soldier\` (haiku) with
   exact files and line hints. A clear edit after a big read: \`swarmod:lieutenant\` (sonnet). Hard or stuck: \`swarmod:captain\` (opus).
@@ -481,9 +522,82 @@ const ORDERS = cli => `swarmod orders — you are the general; spend the fewest 
 - Agents report with path:line proofs and \`NOTE <zone>: …\` lines; reuse zone Notes, do not re-check them.
 - Work that does not split into ≥2 independent parts (one page, one module, one Q&A pass): do it yourself, even when the user
   says "swarmod", and do NOT load the swarmod skill: a lone agent or the skill only adds a round trip for the same result.
-  Bulk text (notes, logs): grep the question's terms and \`sort | uniq -c\` before reading or delegating.
-- Work that does split, or > ~25k tokens to read: load the swarmod skill first (fan-out, role briefs, escalation, handoff),
-  cap your own reading at ~3 files; soldiers read and you work from their proofs.`;
+  Bulk text (notes, logs): grep the question's terms and \`sort | uniq -c\` before reading or delegating.`;
+
+// --- plan (.swarmod/PLAN.md): `- [ ] 1. objective | proof: … | needs: 2, 3 | by: self | skill: -`
+export function planSummary(text) {
+  const steps = text.split('\n').flatMap(l => {
+    const m = l.match(/^\s*- \[([ ~x!?])\]\s*(\d+)\.\s*(.*)$/);
+    if (!m) return [];
+    // shortcut: fields split on "|", so a proof containing "|" is cut; keep it out of proofs.
+    const f = Object.fromEntries(m[3].split('|').slice(1).map(x => x.trim().match(/^(\w+):\s*(.*)$/)).filter(Boolean).map(x => [x[1], x[2]]));
+    return [{ s: m[1], n: +m[2], proof: f.proof ?? '', needs: (f.needs ?? '').match(/\d+/g)?.map(Number) ?? [] }];
+  });
+  if (!steps.length) return '';
+  const done = new Set(steps.filter(s => s.s === 'x').map(s => s.n));
+  const open = steps.filter(s => s.s === ' '), ready = open.filter(s => s.needs.every(n => done.has(n))), wait = open.filter(s => !ready.includes(s));
+  const head = done.size === steps.length ? 'plan complete: rename .swarmod/PLAN.md to PLAN.done.md' : [`plan: ${done.size}/${steps.length} proven`,
+    ready.length && `ready now: ${ready.map(s => s.n).join(', ')}${ready.length > 1 ? ' (independent: launch together)' : ''}`,
+    wait.length && `waiting: ${wait.map(s => `${s.n} (needs ${s.needs.filter(n => !done.has(n)).join(', ')})`).join(', ')}`].filter(Boolean).join(' · ');
+  const bad = steps.filter(s => s.s === 'x' && !/[\w./-]:\d+|→\s*pass/.test(s.proof)).map(s => `check: step ${s.n} marked [x] without a proof`);
+  return [head, ...bad].slice(0, 4).join('\n');
+}
+const readPlan = cwd => { try { return fs.readFileSync(path.join(cwd, OUT, 'PLAN.md'), 'utf8'); } catch { return ''; } };
+
+// --- skills index: name — short description — size — path
+const frontField = (fm, k) => {
+  const m = fm.match(new RegExp(`^${k}:[ \\t]*(.*)$`, 'm'));
+  if (!m) return '';
+  let v = m[1].trim();
+  if (/^[>|][+-]?$/.test(v) || !v) v = fm.slice(m.index + m[0].length).split('\n').slice(1).filter((l, i, a) => /^\s+\S/.test(l) && a.slice(0, i).every(x => /^\s+\S/.test(x))).map(l => l.trim()).join(' ');
+  return v.replace(/^(["'])([\s\S]*)\1$/, '$2');
+};
+function findSkills(dir, lib, out = [], depth = 0) {
+  let ents = [];
+  try { ents = fs.readdirSync(dir, { withFileTypes: true }); } catch { return out; }
+  for (const e of ents) {
+    const p = path.join(dir, e.name);
+    if (e.isDirectory() && e.name !== '.trash' && e.name !== 'node_modules' && depth < 6) findSkills(p, lib, out, depth + 1);
+    else if (e.name === 'SKILL.md') {
+      try {
+        const st = fs.statSync(p), fm = fs.readFileSync(p, 'utf8').match(/^---\r?\n([\s\S]*?)\r?\n---/)?.[1] ?? '';
+        const w = (frontField(fm, 'description').split(/(?<=[.!?])\s/)[0] ?? '').split(/\s+/).filter(Boolean);
+        out.push({ name: frontField(fm, 'name') || path.basename(dir), desc: w.slice(0, 15).join(' ') + (w.length > 15 ? '…' : ''), k: Math.max(0.1, st.size / 4000).toFixed(1), p, lib, t: st.mtimeMs });
+      } catch { /* unreadable skill: skip */ }
+    }
+  }
+  return out;
+}
+export function skillsIndex(home, cwd, words = []) {
+  const all = [...findSkills(path.join(home, '.claude', 'skills'), false)];
+  const cache = path.join(home, '.claude', 'plugins', 'cache');
+  const ls = d => { try { return fs.readdirSync(d); } catch { return []; } };
+  for (const mk of ls(cache)) for (const pl of ls(path.join(cache, mk))) {
+    const v = ls(path.join(cache, mk, pl)).sort((a, b) => a.localeCompare(b, undefined, { numeric: true })).pop();
+    if (v) findSkills(path.join(cache, mk, pl, v, 'skills'), false, all);
+  }
+  findSkills(path.join(home, '.claude', 'skills-library'), true, all);
+  findSkills(path.join(cwd, '.claude', 'skills'), false, all);
+  const byName = new Map();
+  for (const s of all) if (!byName.has(s.name) || byName.get(s.name).t < s.t) byName.set(s.name, s);
+  const terms = words.map(w => w.toLowerCase());
+  let list = [...byName.values()].map(s => ({ s, score: terms.reduce((n, w) => n + (s.name.toLowerCase().includes(w) ? 3 : 0) + (s.desc.toLowerCase().includes(w) ? 1 : 0), 0) }));
+  if (terms.length) list = list.filter(x => x.score).sort((a, b) => b.score - a.score).slice(0, 8);
+  return list.map(({ s }) => ({ s, line: `${s.name} — ${s.desc} — ~${s.k}k tok — ${s.p}${s.lib ? ' [library]' : ''}` }));
+}
+
+// --- journal + stats
+const median = a => { const b = [...a].sort((x, y) => x - y); return b.length ? (b[b.length >> 1] + b[(b.length - 1) >> 1]) / 2 : 0; };
+export function statsText(journal) {
+  const by = {};
+  for (const l of journal.split('\n')) { try { const r = JSON.parse(l); (by[r.agent] ??= []).push(r); } catch { /* blank or partial line */ } }
+  const sum = (rs, k) => rs.reduce((n, r) => n + (r[k] || 0), 0);
+  const rows = Object.entries(by).map(([a, rs]) => {
+    const pc = st => Math.round(100 * rs.filter(r => r.status === st).length / rs.length);
+    return `${a}: ${rs.length} runs · done ${pc('done')}% unproven ${pc('unproven')}% blocked ${pc('blocked')}% · notes ${sum(rs, 'notes_kept')} kept / ${sum(rs, 'notes_rejected')} rejected · unrun checks ${sum(rs, 'checks_unrun')} · median ${median(rs.map(r => r.seconds || 0))}s · ${sum(rs, 'in_tokens') + sum(rs, 'out_tokens')} tokens`;
+  });
+  return rows.length ? rows.join('\n') : 'no runs journaled yet.';
+}
 
 // SessionStart hook: refresh the map, inject it, and consume a pending handoff once.
 function session() {
@@ -503,17 +617,24 @@ function session() {
   if (fs.existsSync(handoff)) {
     out.push(`<swarmod-handoff>\n${fs.readFileSync(handoff, 'utf8')}</swarmod-handoff>`,
       'swarmod: a previous session handed off this work. Resume from the handoff above.');
-    fs.renameSync(handoff, path.join(cwd, OUT, 'HANDOFF.done.md'));
+    try { fs.renameSync(handoff, path.join(cwd, OUT, 'HANDOFF.done.md')); } catch { /* injected again next session: better than losing this output */ }
   }
+  const plan = readPlan(cwd).split('\n').slice(0, 40).join('\n').trim();
+  if (plan) out.push(`<swarmod-plan>\n${plan}\n</swarmod-plan>`);
+  try {
+    const lib = skillsIndex(os.homedir(), cwd).filter(x => x.s.lib).map(x => x.line);
+    if (lib.length) out.push(`swarmod library skills (not in the native list; load with Read <path>):\n${lib.join('\n')}`);
+  } catch { /* the index is a courtesy */ }
   if (out.length) console.log(out.join('\n\n'));
 }
 
 // UserPromptSubmit hook: past the threshold, tell Claude to write a handoff and ask for /clear.
 // Default 110k ≈ 55% of a 200k window, before native auto-compaction.
 function guard() {
-  const { transcript_path } = readHookInput();
+  const { transcript_path, cwd = process.cwd() } = readHookInput();
   // Repeated on every prompt: the model otherwise forgets the session-start orders after the first task.
   console.log('swarmod: if this task splits into ≥2 independent parts, fan out per the swarmod orders; otherwise do it yourself.');
+  try { const p = planSummary(readPlan(cwd)); if (p) console.log(p); } catch { /* never block a prompt */ }
   const limit = Number(process.env.SWARMOD_HANDOFF_TOKENS) || 110_000;
   let tokens = 0;
   try { tokens = contextTokens(transcript_path); } catch { return; }
@@ -522,40 +643,88 @@ function guard() {
     'Finish the current step, then follow the swarmod handoff procedure: write .swarmod/HANDOFF.md and tell the user to run /clear.');
 }
 
-// PostToolUse hook: lint the edited file (silent on success) and refresh its zone in the map.
+// Test-weakening guard: what an edit ADDS (skips, suppressions) or REMOVES (assertions in a test file). '' when clean.
+const WEAK = ['.skip(', 'xit(', 'xdescribe(', '.only(', '@ts-ignore', '@ts-nocheck', 'eslint-disable', '# noqa', 'pytest.mark.skip', 'markTestSkipped', 't.skip', 'test.todo'];
+const countRe = (s, re) => (s.match(re) || []).length;
+const weakRe = w => new RegExp((/^\w/.test(w) ? '(?<![\\w.])' : '') + w.replace(/[.(]/g, '\\$&'), 'g');
+export function weakens(root, inp) {
+  const f = inp.file_path;
+  if (!f) return '';
+  let before = '', after;
+  if (inp.new_string !== undefined) { before = inp.old_string ?? ''; after = inp.new_string; }
+  else if (Array.isArray(inp.edits)) { before = inp.edits.map(e => e.old_string).join('\n'); after = inp.edits.map(e => e.new_string).join('\n'); }
+  else if (typeof inp.content === 'string') {
+    after = inp.content;
+    try { before = execFileSync('git', ['show', `HEAD:./${path.relative(root, f).split(path.sep).join('/')}`], { cwd: root, stdio: 'pipe' }).toString(); } catch { before = null; }
+  } else return '';
+  const hit = WEAK.filter(w => countRe(after, weakRe(w)) > countRe(before ?? '', weakRe(w)));
+  const asserts = /\bassert|\bexpect\(/g;
+  if (before !== null && (TESTS.test(f) || /\.(test|spec)\.|_test\.|(^|\/)test_/.test(f)) && countRe(after, asserts) < countRe(before, asserts)) hit.push('removes assertions');
+  return hit.length ? `swarmod guard: ${path.basename(f)} — this edit weakens a check (${hit.join(', ')}). Revert it unless the user asked for it; fix the code, not the test.` : '';
+}
+
+// PostToolUse hook: lint the edited file (silent on success), guard against weakened tests, refresh its zone in the map.
 function postEdit() {
   const { cwd = process.cwd(), tool_input = {} } = readHookInput();
   const abs = tool_input.file_path || tool_input.notebook_path;
   if (!abs) return;
   if (fs.existsSync(path.join(cwd, OUT, 'cache.json'))) try { refreshFile(cwd, abs); } catch { /* never block an edit */ }
+  const msgs = [];
   const err = lint(abs);
-  if (err) console.log(JSON.stringify({ hookSpecificOutput: { hookEventName: 'PostToolUse',
-    additionalContext: `swarmod lint: ${path.basename(abs)} has a syntax error, fix it now:\n${err}` } }));
+  if (err) msgs.push(`swarmod lint: ${path.basename(abs)} has a syntax error, fix it now:\n${err}`);
+  try { const w = weakens(cwd, tool_input); if (w) msgs.push(w); } catch { /* never block an edit */ }
+  if (msgs.length) console.log(JSON.stringify({ hookSpecificOutput: { hookEventName: 'PostToolUse', additionalContext: msgs.join('\n') } }));
 }
 
-// SubagentStop hook: record the agent's proven NOTE lines (its report may be its last text or a SubagentHandback message).
+// SubagentStop hook: block a report claiming a check that never ran; else record the proven NOTE lines and journal the run.
 function intel() {
-  const { cwd = process.cwd(), agent_type = 'agent', agent_transcript_path, last_assistant_message = '' } = readHookInput();
-  const texts = [last_assistant_message];
+  const { cwd = process.cwd(), agent_type = 'agent', agent_transcript_path, last_assistant_message = '', stop_hook_active } = readHookInput();
+  const texts = [last_assistant_message], reports = [last_assistant_message], ran = [];
+  let t0 = 0, t1 = 0, haveT = false;
+  const usage = new Map(); // message id → usage: the transcript repeats one message's usage on each of its content-block lines
   try {
     for (const l of fs.readFileSync(agent_transcript_path, 'utf8').split('\n')) {
-      if (!l.includes('NOTE')) continue;
-      for (const c of JSON.parse(l).message?.content ?? []) texts.push(c.text ?? c.input?.message ?? '');
+      let j;
+      try { j = JSON.parse(l); } catch { continue; }
+      const u = j.message?.usage, t = Date.parse(j.timestamp);
+      if (u) usage.set(j.message.id ?? usage.size, u);
+      if (t) { t0 ||= t; t1 = t; }
+      for (const c of Array.isArray(j.message?.content) ? j.message.content : []) {
+        if (c.name === 'Bash' && c.input?.command) ran.push(c.input.command);
+        if (c.input?.message) reports.push(c.input.message);
+        if (l.includes('NOTE')) texts.push(c.text ?? c.input?.message ?? '');
+      }
     }
+    haveT = true;
   } catch { /* no transcript: last message only */ }
-  recordNotes(cwd, texts.filter(t => typeof t === 'string').join('\n'), agent_type.replace(/^swarmod:/, ''));
+  let inT = 0, outT = 0;
+  for (const u of usage.values()) { inT += (u.input_tokens || 0) + (u.cache_creation_input_tokens || 0) + (u.cache_read_input_tokens || 0); outT += u.output_tokens || 0; }
+  const claimed = [...new Set(reports.filter(r => typeof r === 'string').join('\n').split('\n').map(l => l.match(/check:\s*(.+?)\s*→/)?.[1].replace(/`/g, '').trim()).filter(Boolean))];
+  const unrun = haveT ? claimed.filter(c => !ran.some(r => r.includes(c))) : []; // no transcript: nothing to verify against
+  if (unrun.length && !stop_hook_active) {
+    console.log(JSON.stringify({ decision: 'block', reason: `swarmod: you reported check \`${unrun[0]}\` but never ran it. Run it and report its real output, or remove the line and use STATUS: unproven.` }));
+    return;
+  }
+  const all = texts.filter(t => typeof t === 'string').join('\n'), stat = {};
+  const kept = recordNotes(cwd, all, agent_type.replace(/^swarmod:/, ''), stat);
+  if (!fs.existsSync(path.join(cwd, OUT))) return;
+  const status = [...all.matchAll(/STATUS:\s*(done|unproven|blocked|contested)/gi)].pop()?.[1].toLowerCase() ?? '';
+  fs.appendFileSync(path.join(cwd, OUT, 'journal.jsonl'), JSON.stringify({ date: new Date().toISOString(), agent: agent_type.replace(/^swarmod:/, ''), status,
+    notes_kept: kept, notes_rejected: stat.rejected ?? 0, checks_claimed: claimed.length, checks_unrun: unrun.length, out_tokens: outT, in_tokens: inT, seconds: Math.round((t1 - t0) / 1000) }) + '\n');
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === fs.realpathSync(process.argv[1])) {
   const [cmd, dir = '.'] = process.argv.slice(2);
+  let root = process.cwd(); // nearest folder holding the map, so `find` works after a `cd src`
+  for (let d = root; ; d = path.dirname(d)) { if (fs.existsSync(path.join(d, OUT))) { root = d; break; } if (path.dirname(d) === d) break; }
   if (cmd === 'map') {
     const r = buildMap(dir);
     console.log(`swarmod: ${r.files} files, ${r.zones} zones, ${r.analyzed} (re)analyzed → ${path.join(dir, OUT, 'map.md')}`);
   } else if (cmd === 'find') {
-    const out = find(process.cwd(), process.argv.slice(3));
+    const out = find(root, process.argv.slice(3));
     console.log(out.length ? out.join('\n') : 'no match: try other words, or read the zone file.');
   } else if (cmd === 'split') {
-    const { files } = JSON.parse(fs.readFileSync(path.join(OUT, 'cache.json'), 'utf8'));
+    const { files } = JSON.parse(fs.readFileSync(path.join(root, OUT, 'cache.json'), 'utf8'));
     split(files, Number(dir) || 4, process.argv.slice(4)).forEach((b, i) =>
       console.log(`batch ${i + 1} (~${Math.round(b.bytes / 4000)}k tokens): ${b.files.join(' ')}`));
   } else if (cmd === 'session') session();
@@ -563,5 +732,8 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === fs.realpathSync(proces
   else if (cmd === 'refresh') postEdit();
   else if (cmd === 'precompact') console.log(PRECOMPACT);
   else if (cmd === 'intel') intel();
-  else { console.error('usage: swarmod map [dir] | find <words> | split <n> [path words] | session | guard | refresh | precompact | intel'); process.exit(1); }
+  else if (cmd === 'plan') console.log(planSummary(readPlan(root)) || 'no plan: .swarmod/PLAN.md is missing or has no steps.');
+  else if (cmd === 'skills') { const r = skillsIndex(os.homedir(), root, process.argv.slice(3)); console.log(r.length ? r.map(x => x.line).join('\n') : 'no skill matches: try other words.'); }
+  else if (cmd === 'stats') { try { console.log(statsText(fs.readFileSync(path.join(root, OUT, 'journal.jsonl'), 'utf8'))); } catch { console.log('no runs journaled yet.'); } }
+  else { console.error('usage: swarmod map [dir] | find <words> | split <n> [path words] | plan | skills [words] | stats | session | guard | refresh | precompact | intel'); process.exit(1); }
 }

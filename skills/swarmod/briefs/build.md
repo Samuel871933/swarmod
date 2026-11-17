@@ -10,3 +10,4 @@ Confirm each item before STATUS: done, or say why it does not apply.
 7. Lists paginated, one error shape, no stack traces or secrets in responses or logs; auth and ownership checked per resource.
 8. One test per new branch or parser; it must fail when the logic is inverted.
 9. Report: files changed, commands run with pass/fail counts, anything skipped.
+Default steps: 1. shared types/schema/config 2. one slice per feature (code + its tests) 3. integrate 4. run project checks

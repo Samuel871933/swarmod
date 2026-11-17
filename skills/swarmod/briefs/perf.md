@@ -9,3 +9,4 @@ For each item: a finding with path:line and the measured or estimated impact, or
 6. Memory: unbounded maps, caches or listeners; resources never closed or disposed.
 7. Web budgets: initial JS < 200 KB gzipped, LCP ≤ 2.5 s, INP ≤ 200 ms, CLS ≤ 0.1; LCP image not lazy; media with width/height.
 8. Label every number by source (measured / lab / estimated); never mix them.
+Default steps: 1. measure baseline 2. find the hotspot 3. one fix 4. re-measure

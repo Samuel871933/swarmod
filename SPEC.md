@@ -45,3 +45,12 @@ Tâche au grade le moins cher capable ; le général fournit fichiers et lignes 
 preuve `path:line` pour tout fait, rapport `STATUS: done|blocked|contested`, pas de communication latérale (mémoire partagée =
 lignes `NOTE <zone>: … — proof: …`, gardées par le hook `SubagentStop` (`intel`) si la ligne citée existe), blocage → remonte d'un grade,
 fait douteux dont dépend une décision → paire de soldats PROUVER / RÉFUTER, désaccord → arbitrage par le supérieur, puis l'utilisateur.
+
+## v0.5 — preuves vérifiées, plan en étapes, skills à la demande
+Preuves vérifiées par code : le hook `SubagentStop` bloque une fois un rapport qui annonce un `check:` jamais exécuté ;
+`STATUS: unproven` (ni prouvé ni réfuté) traité comme non fait ; les NOTE portent une citation `"<texte>"` vérifiée à ±2 lignes
+et ré-ancrée (ou supprimée) quand le fichier change. Garde anti-affaiblissement des tests, journal + `swarmod stats`.
+Pensée en étapes : `.swarmod/PLAN.md` (≥3 étapes, preuve attendue, dépendances, grade, skill), `swarmod plan`, ligne `Default steps:` dans chaque brief.
+Skills à la demande : `swarmod skills <mots>` remplace le balayage de la liste native ; les skills `[library]` se lisent par `Read`.
+Bug délégué : test qui échoue écrit d'abord, hors des fichiers du correcteur ; paire PROUVER/RÉFUTER avec RÉFUTER en `sonnet`.
+La règle « déléguer seulement pour le parallélisme » est inchangée.

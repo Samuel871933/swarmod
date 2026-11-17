@@ -9,3 +9,4 @@ Confirm each item before STATUS: done.
 6. Tests independent of order and shared state; no sleeps; fixed seeds and clocks.
 7. Never skip, delete or loosen an existing test to get green; report it instead.
 8. Report the pass/fail counts of the full suite.
+Default steps: 1. list behaviors + edge cases 2. write failing tests 3. run them 4. confirm they fail for the right reason

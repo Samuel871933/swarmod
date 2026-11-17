@@ -11,3 +11,4 @@ Confirm each item (or report it as a finding with path:line) before STATUS: done
 8. Components over ~200 lines split; no prop drilling beyond 3 levels.
 9. No generic AI look (purple gradients, rounded-2xl card grids everywhere, heavy shadows) unless the project already uses it.
 10. If a browser is available: zero console errors, and a screenshot of the result.
+Default steps: 1. color/type charter 2. mockups per template 3. extract/optimize images 4. integrate 5. visual check

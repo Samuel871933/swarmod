@@ -9,3 +9,4 @@ Confirm each item before STATUS: done.
 6. Flatten deep nesting and nested ternaries with guard clauses; keep helpers that give a concept a name.
 7. Keep every validation and error handler you move.
 8. Stay in scope: no drive-by changes outside the file list.
+Default steps: 1. green baseline test 2. one behavior-preserving move at a time 3. re-run tests after each 4. grep --exclude='wp-config.php' --exclude='parameters.php' --exclude='parameters.yml' --exclude='settings.inc.php' --exclude='.htpasswd' --exclude='auth.json' --exclude='.env.local' --exclude='.env.*.local' --exclude='.env.local.php' callers/exports

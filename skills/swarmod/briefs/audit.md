@@ -14,3 +14,4 @@ For each item: report a finding, or "sound" with the quoted guard at path:line, 
    rate limiter placed after the check it should protect.
 7. Writes on GET, unbounded input creating rows, unpaginated dumps.
 8. Framework config: firewall/throttling/access_control in config files, not only the code that mentions them.
+Default steps: 1. split code into batches (swarmod split) 2. one soldier per batch 3. re-read cited high-severity lines 4. ranked report

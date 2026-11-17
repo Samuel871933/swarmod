@@ -171,10 +171,12 @@ test('intel hook keeps proven NOTE lines in zone notes, drops unproven ones', ()
   buildMap(dir);
   const report = [
     'STATUS: done',
-    'NOTE .: a() is the only export — proof: lib/a.js:1',
-    'NOTE .: invented fact — proof: lib/a.js:99',
-    'NOTE .: outside the project — proof: ../x.js:1',
-    'NOTE nozone: unknown zone and file — proof: nofile.js:1',
+    'NOTE .: a() is the only export — proof: lib/a.js:1 "export function a()"',
+    'NOTE .: invented fact — proof: lib/a.js:99 "nothing"',
+    'NOTE .: wrong quote — proof: lib/a.js:1 "export class Zed"',
+    'NOTE .: no quote — proof: lib/a.js:1',
+    'NOTE .: outside the project — proof: ../x.js:1 "x"',
+    'NOTE nozone: unknown zone and file — proof: nofile.js:1 "x"',
   ].join('\n');
   const transcript = path.join(dir, 'agent.jsonl');
   fs.writeFileSync(transcript, JSON.stringify({ type: 'assistant', message: { content: [{ type: 'tool_use', name: 'SubagentHandback', input: { message: report } }] } }) + '\n');
@@ -183,10 +185,10 @@ test('intel hook keeps proven NOTE lines in zone notes, drops unproven ones', ()
   run('intel', input); // same report twice: no duplicate
   const notes = fs.readFileSync(path.join(dir, '.swarmod', 'notes', '_root.md'), 'utf8');
   assert.equal(notes.trim().split('\n').length, 1);
-  assert.match(notes, /^- a\(\) is the only export — proof: lib\/a\.js:1 \(soldier, \d{4}-\d\d-\d\d\)/);
+  assert.match(notes, /^- a\(\) is the only export — proof: lib\/a\.js:1 "export function a\(\)" \(soldier, \d{4}-\d\d-\d\d\)/);
   assert.match(fs.readFileSync(path.join(dir, '.swarmod', 'zones', '_root.md'), 'utf8'), /a\(\) is the only export/);
-  assert.equal(recordNotes(dir, 'NOTE .: range — proof: lib/a.js:2-3, `lib/a.js:1`'), 1);
-  assert.equal(recordNotes(dir, 'NOTE shortname: zone taken from the proof — proof: lib/a.js:2'), 1); // agents shorten zone names
+  assert.equal(recordNotes(dir, 'NOTE .: range — proof: `lib/a.js:2-3` "two"'), 1);
+  assert.equal(recordNotes(dir, 'NOTE shortname: zone taken from the proof — proof: lib/a.js:2 "// two"'), 1); // agents shorten zone names
 });
 
 test('guard repeats the split reminder on every prompt, even in an empty folder', () => {
@@ -211,4 +213,119 @@ test('every role brief named in the skill exists', () => {
     .filter(n => n !== '_more');
   assert.ok(named.length >= 10, `only ${named.length} briefs named`);
   for (const n of named) assert.ok(fs.existsSync(path.join(dir, 'briefs', n + '.md')), `briefs/${n}.md missing`);
+});
+
+const mk = () => fs.mkdtempSync(path.join(os.tmpdir(), 'swarmod-'));
+
+test('verified checks: block a report claiming a check that never ran, once', () => {
+  const dir = mk(), t = path.join(dir, 'a.jsonl');
+  const line = c => JSON.stringify({ type: 'assistant', message: { content: [c] } }) + '\n';
+  fs.writeFileSync(t, line({ type: 'tool_use', name: 'Bash', input: { command: 'cd x && npm test 2>&1' } }));
+  const input = { cwd: dir, agent_type: 'swarmod:lieutenant', agent_transcript_path: t };
+  assert.equal(run('intel', { ...input, last_assistant_message: 'STATUS: done\n- check: `npm test` → pass' }), '');
+  const out = JSON.parse(run('intel', { ...input, last_assistant_message: '- check: npm run lint → pass' }));
+  assert.equal(out.decision, 'block');
+  assert.match(out.reason, /npm run lint/);
+  assert.equal(run('intel', { ...input, stop_hook_active: true, last_assistant_message: '- check: npm run lint → pass' }), '');
+});
+
+test('notes follow the code: re-anchored when the quote moves, dropped when it vanishes', () => {
+  const dir = mk(), f = path.join(dir, 'a.js');
+  fs.writeFileSync(f, 'one\ntwo\nthree\nfour\nfive\nsix\nexport function a() {}\n');
+  buildMap(dir);
+  assert.equal(recordNotes(dir, 'NOTE .: a exists — proof: a.js:7 "export function a()"'), 1);
+  const notes = path.join(dir, '.swarmod', 'notes', '_root.md');
+  fs.writeFileSync(f, '0\n1\n2\n3\n4\n5\n6\n7\n8\nexport function a() {}\n');
+  refreshFile(dir, f);
+  assert.match(fs.readFileSync(notes, 'utf8'), /a\.js:10 "export function a\(\)"/);
+  fs.writeFileSync(f, 'nothing\n');
+  refreshFile(dir, f);
+  assert.equal(fs.readFileSync(notes, 'utf8').trim(), '');
+});
+
+test('notes follow changes made outside Claude (next map), and a zone file shows only the newest 20', () => {
+  const dir = mk(), f = path.join(dir, 'a.js');
+  fs.writeFileSync(f, Array.from({ length: 30 }, (_, i) => `export const v${i} = ${i};`).join('\n') + '\n');
+  buildMap(dir);
+  const notes = path.join(dir, '.swarmod', 'notes', '_root.md'), zone = path.join(dir, '.swarmod', 'zones', '_root.md');
+  for (let i = 0; i < 25; i++) recordNotes(dir, `NOTE .: v${i} is ${i} — proof: a.js:${i + 1} "export const v${i} = ${i};"`);
+  const shown = fs.readFileSync(zone, 'utf8');
+  assert.ok(!shown.includes('v4 is 4') && shown.includes('v5 is 5') && shown.includes('v24 is 24'));
+  assert.match(shown, /\+5 older notes: Grep/);
+  assert.equal(recordNotes(dir, 'NOTE .: v0 is 0 — proof: a.js:1 "export const v0 = 0;"'), 0); // known: not new...
+  assert.ok(fs.readFileSync(zone, 'utf8').includes('v0 is 0')); // ...but back in the shown window
+  assert.equal(fs.readFileSync(notes, 'utf8').match(/v0 is 0/g).length, 1);
+  fs.writeFileSync(f, 'export const v0 = 0;\n'); // "git pull": no edit hook, only the next session map
+  buildMap(dir);
+  assert.equal(fs.readFileSync(notes, 'utf8').trim().split('\n').length, 1);
+  fs.unlinkSync(f);
+  buildMap(dir);
+  assert.equal(fs.readFileSync(notes, 'utf8').trim(), '');
+});
+
+test('guard flags a weakened test (skip added, assertions removed), not a clean edit', () => {
+  const dir = mk();
+  const edit = (file_path, old_string, new_string) => run('refresh', { cwd: dir, tool_name: 'Edit', tool_input: { file_path, old_string, new_string } });
+  assert.match(edit(path.join(dir, 'a.test.js'), "test('x', () => {})", "test.skip('x', () => {})"), /weakens a check \(.skip\(/);
+  assert.match(edit(path.join(dir, 'a.test.js'), 'assert.ok(1); assert.ok(2);', 'assert.ok(1);'), /removes assertions/);
+  fs.writeFileSync(path.join(dir, 'a.js'), 'let a = 2');
+  assert.equal(edit(path.join(dir, 'a.js'), 'let a = 1', 'let a = 2'), '');
+});
+
+test('journal + stats: intel appends a run, stats summarizes per agent', () => {
+  const dir = mk(), t = path.join(dir, 'a.jsonl');
+  fs.mkdirSync(path.join(dir, '.swarmod'));
+  const m = (ts, usage, content) => JSON.stringify({ timestamp: ts, message: { usage, content } }) + '\n';
+  fs.writeFileSync(t, m('2026-01-01T00:00:00Z', { input_tokens: 5, output_tokens: 7 }, []) + m('2026-01-01T00:00:10Z', { input_tokens: 1, output_tokens: 3 }, []));
+  run('intel', { cwd: dir, agent_type: 'swarmod:soldier', agent_transcript_path: t, last_assistant_message: 'STATUS: unproven' });
+  const j = JSON.parse(fs.readFileSync(path.join(dir, '.swarmod', 'journal.jsonl'), 'utf8'));
+  assert.deepEqual([j.agent, j.status, j.in_tokens, j.out_tokens, j.seconds], ['soldier', 'unproven', 6, 10, 10]);
+  const out = execFileSync('node', [fileURLToPath(new URL('./swarmod.mjs', import.meta.url)), 'stats'], { cwd: dir }).toString();
+  assert.match(out, /soldier: 1 runs · done 0% unproven 100%/);
+});
+
+test('plan: summary, unproven [x] flagged, injected by guard and session', () => {
+  const dir = mk();
+  fs.mkdirSync(path.join(dir, '.swarmod'));
+  const plan = path.join(dir, '.swarmod', 'PLAN.md');
+  fs.writeFileSync(plan, ['# Plan — demo', '- [x] 1. a | proof: a.js:1 "x" | needs: —', '- [x] 2. b | proof: done | needs: 1',
+    '- [ ] 3. c | proof: t → pass | needs: 1', '- [ ] 4. d | proof: p | needs: —', '- [ ] 5. e | proof: p | needs: 3'].join('\n'));
+  const g = run('guard', { cwd: dir, transcript_path: path.join(dir, 'none') });
+  assert.match(g, /plan: 2\/5 proven · ready now: 3, 4 \(independent: launch together\) · waiting: 5 \(needs 3\)/);
+  assert.match(g, /check: step 2 marked \[x\] without a proof/);
+  assert.match(run('session', { cwd: dir }), /<swarmod-plan>[\s\S]*Plan — demo/);
+  fs.writeFileSync(plan, '- [x] 1. a | proof: a.js:1 "x"\n');
+  assert.match(run('guard', { cwd: dir, transcript_path: path.join(dir, 'none') }), /plan complete: rename/);
+});
+
+test('skills index: dedupe by name keeping newest, word search, library lines in session', () => {
+  const home = mk(), proj = mk();
+  const skill = (rel, name, desc, t) => {
+    const f = path.join(home, '.claude', rel, 'SKILL.md');
+    fs.mkdirSync(path.dirname(f), { recursive: true });
+    fs.writeFileSync(f, `---\nname: ${name}\ndescription: ${desc}\n---\nbody`);
+    fs.utimesSync(f, t, t);
+  };
+  skill('skills/pdfx', 'pdfx', 'Old pdf tool. Second sentence.', 1000);
+  skill('skills/.trash/pdfx', 'pdfx', 'Trashed.', 5000);
+  skill('skills-library/misc/pdfx', 'pdfx', 'New pdf tool. More.', 3000);
+  skill('skills-library/other', 'chart', 'Draw charts', 2000);
+  const sw = (cmd, ...a) => execFileSync('node', [fileURLToPath(new URL('./swarmod.mjs', import.meta.url)), cmd, ...a], { cwd: proj, env: { ...process.env, HOME: home } }).toString();
+  const out = sw('skills', 'pdf');
+  assert.equal(out.trim().split('\n').length, 1);
+  assert.match(out, /^pdfx — New pdf tool\. — ~0\.1k tok — .*skills-library.*SKILL\.md \[library\]/);
+  assert.equal(sw('skills').trim().split('\n').length, 2);
+  const s = execFileSync('node', [fileURLToPath(new URL('./swarmod.mjs', import.meta.url)), 'session'], { input: JSON.stringify({ cwd: proj }), env: { ...process.env, HOME: home } }).toString();
+  assert.match(s, /library skills[\s\S]*chart — Draw charts/);
+});
+
+test('map ignores itself via .swarmod/.gitignore and leaves the project .gitignore alone', () => {
+  const dir = mk(), gi = path.join(dir, '.gitignore');
+  fs.writeFileSync(path.join(dir, 'a.js'), 'export const a = 1;\n');
+  fs.writeFileSync(gi, 'node_modules/');
+  buildMap(dir);
+  assert.equal(fs.readFileSync(gi, 'utf8'), 'node_modules/');
+  assert.equal(fs.readFileSync(path.join(dir, '.swarmod', '.gitignore'), 'utf8'), '*\n');
+  execFileSync('git', ['init', '-q'], { cwd: dir });
+  assert.equal(execFileSync('git', ['status', '--porcelain'], { cwd: dir, encoding: 'utf8' }).includes('.swarmod'), false);
 });
